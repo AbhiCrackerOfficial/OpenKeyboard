@@ -11,13 +11,19 @@
 export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
-		switch (url.pathname) {
-			case '/message':
-				return new Response('Hello, World!');
-			case '/random':
-				return new Response(crypto.randomUUID());
-			default:
-				return new Response('Not Found', { status: 404 });
+		if (url.pathname === '/api/status') {
+			return new Response(JSON.stringify({
+				status: 'online',
+				platform: 'Cloudflare Workers',
+				device: 'AULA F87 / F87 Pro Web Controller',
+				timestamp: new Date().toISOString()
+			}), {
+				headers: {
+					'Content-Type': 'application/json',
+					'Access-Control-Allow-Origin': '*'
+				}
+			});
 		}
+		return new Response('Not Found', { status: 404 });
 	},
 };
