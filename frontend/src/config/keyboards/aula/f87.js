@@ -1,5 +1,5 @@
 // ─── AULA F87 / F87 Pro Keyboard Profile ──────────────────────────────────────
-import { hexToBytes } from '../../utils/colorUtils';
+import { hexToBytes } from '../../../utils/colorUtils';
 
 export const AULA_F87_PROFILE = {
   id: 'aula-f87-pro',
@@ -172,7 +172,7 @@ export const AULA_F87_PROFILE = {
     [65,  12.5,  5.45, 1.2,  0.95, "Super"],
     [83,  13.75, 5.45, 1.2,  0.95, "Ctrl"],
     [89,  15.75, 5.45, 0.95, 0.95, "←"],
-    [95,  16.75, 5.45, 0.95, 0.95, "↓"],
+    [95, 16.75, 5.45, 0.95, 0.95, "↓"],
     [101, 17.75, 5.45, 0.95, 0.95, "→"],
   ],
 

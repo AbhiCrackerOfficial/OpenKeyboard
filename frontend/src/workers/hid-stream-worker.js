@@ -1,4 +1,4 @@
-import { AULA_F87_PROFILE as profile } from '../config/keyboards/aula-f87';
+import { AULA_F87_PROFILE as profile } from '../config/keyboards/aula/f87';
 import { renderAudioFrame } from '../utils/renderEngine';
 import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport } from '../utils/streamProtocol';
 

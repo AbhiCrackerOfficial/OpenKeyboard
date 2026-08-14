@@ -135,28 +135,29 @@ body {
 
 /* Glass style */
 [data-style="glass"] .panel {
-  background:        var(--surface);
-  backdrop-filter:   blur(22px) saturate(1.4);
-  -webkit-backdrop-filter: blur(22px) saturate(1.4);
-  border:            1px solid var(--border-alt);
+  background:        rgba(15, 23, 42, 0.42);
+  backdrop-filter:   blur(25px) saturate(210%);
+  -webkit-backdrop-filter: blur(25px) saturate(210%);
+  border:            1px solid rgba(255, 255, 255, 0.08);
   box-shadow:
-    0 8px 32px rgba(0,0,0,0.25),
-    inset 0 1px 0 rgba(255,255,255,0.06),
-    0 0 0 0.5px rgba(255,255,255,0.04);
+    0 8px 32px rgba(0,0,0,0.35),
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 0 0 1px rgba(255,255,255,0.02);
   border-radius:     var(--radius-glass);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition:        transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, border-color 0.2s ease;
 }
 [data-style="glass"] .panel:hover {
   box-shadow:
-    0 12px 40px rgba(0,0,0,0.35),
-    inset 0 1px 0 rgba(255,255,255,0.1),
-    0 0 0 1px rgba(var(--accent-rgb),0.2);
+    0 12px 48px rgba(0,0,0,0.45),
+    inset 0 1px 0 rgba(255,255,255,0.12),
+    0 0 24px rgba(var(--accent-rgb),0.12);
+  border-color: rgba(var(--accent-rgb), 0.25);
 }
 [data-style="glass"] .panel-accent {
   border-color: rgba(var(--accent-rgb), 0.35);
   box-shadow:
-    0 8px 32px rgba(0,0,0,0.25),
-    0 0 20px rgba(var(--accent-rgb),0.15),
+    0 8px 32px rgba(0,0,0,0.3),
+    0 0 24px rgba(var(--accent-rgb),0.18),
     inset 0 1px 0 rgba(255,255,255,0.06);
 }
 [data-theme="light"][data-style="glass"] .panel {
@@ -170,18 +171,18 @@ body {
   background:    var(--surface2);
   backdrop-filter: none;
   border:        3px solid var(--border);
-  box-shadow:    6px 6px 0 var(--border);
+  box-shadow:    8px 8px 0 var(--border);
   border-radius: var(--radius-neo);
-  transition:    transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  transition:    transform 0.1s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.1s ease, border-color 0.1s ease;
 }
 [data-style="neo"] .panel:hover {
-  transform:  translate(-2px,-2px);
-  box-shadow: 8px 8px 0 var(--accent);
+  transform:  translate(-3px,-3px);
+  box-shadow: 11px 11px 0 var(--accent);
   border-color: var(--accent);
 }
 [data-style="neo"] .panel-accent {
   border-color: var(--accent);
-  box-shadow:   6px 6px 0 var(--accent);
+  box-shadow:   8px 8px 0 var(--accent);
 }
 
 /* Buttons */
@@ -368,7 +369,7 @@ body {
 .toggle-pill-btn:hover  { color: var(--text); }
 .toggle-pill-btn.active {
   background: var(--accent);
-  color:      #fff;
+  color:      var(--accent-contrast, #ffffff);
 }
 [data-style="neo"] .toggle-pill {
   border-radius: 0;
@@ -376,7 +377,7 @@ body {
   box-shadow: 3px 3px 0 var(--border);
 }
 [data-style="neo"] .toggle-pill-btn.active {
-  color: #fff;
+  color:      var(--accent-contrast, #ffffff);
   background: var(--accent);
 }
 

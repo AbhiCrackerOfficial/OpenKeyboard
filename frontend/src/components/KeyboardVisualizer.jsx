@@ -3,20 +3,7 @@ import { hsv } from '../utils/colorUtils';
 import { DEFAULT_KEYBOARD_PROFILE } from '../config/keyboards';
 import { renderAudioFrame, renderEffectFrame } from '../utils/renderEngine';
 
-const TOTAL_WIDTH_U = 19.1;
-const TOTAL_HEIGHT_U = 6.65;
-
-function getKeyStyle(leftU, topU, widthU, heightU) {
-  const marginX = 0.2;
-  const marginY = 0.2;
-  return {
-    position: 'absolute',
-    left: `${((leftU + marginX) / TOTAL_WIDTH_U) * 100}%`,
-    top: `${((topU + marginY) / TOTAL_HEIGHT_U) * 100}%`,
-    width: `${(widthU / TOTAL_WIDTH_U) * 100}%`,
-    height: `${(heightU / TOTAL_HEIGHT_U) * 100}%`,
-  };
-}
+// Dynamic keycaps rendering utility based on keyboard layout profile dimensions
 
 const CODE_TO_IDX = {
   Escape: 0, F1: 12, F2: 18, F3: 24, F4: 30, F5: 36, F6: 42, F7: 48, F8: 54, F9: 60, F10: 66, F11: 72, F12: 78, PrintScreen: 84, ScrollLock: 90, Pause: 96,
@@ -50,6 +37,24 @@ export default function KeyboardVisualizer({
   const freqBuf = useRef(null);
 
   const keys = profile.keys || DEFAULT_KEYBOARD_PROFILE.keys;
+
+  // Calculate dynamic dimensions of the keyboard layout
+  const maxW = keys.length > 0 ? Math.max(...keys.map(k => k[1] + k[3])) : 18.25;
+  const maxH = keys.length > 0 ? Math.max(...keys.map(k => k[2] + k[4])) : 6.25;
+  const totalW = maxW + 0.3;
+  const totalH = maxH + 0.3;
+
+  const getKeyStyle = (leftU, topU, widthU, heightU) => {
+    const marginX = 0.2;
+    const marginY = 0.2;
+    return {
+      position: 'absolute',
+      left: `${((leftU + marginX) / totalW) * 100}%`,
+      top: `${((topU + marginY) / totalH) * 100}%`,
+      width: `${(widthU / totalW) * 100}%`,
+      height: `${(heightU / totalH) * 100}%`,
+    };
+  };
 
   const audioModeRef = useRef(audioMode);
   const audioGainRef = useRef(audioGain);
@@ -131,7 +136,17 @@ export default function KeyboardVisualizer({
       for (const [idx] of keys) {
         const el = keyRefs.current[idx];
         if (!el) continue;
-        const [r, g, b] = colors.get(idx) || [0, 0, 0];
+        let [r, g, b] = colors.get(idx) || [0, 0, 0];
+
+        // Overlay click/press state to flash the keycap
+        const pressVal = pressRef.current[idx] || 0;
+        if (pressVal > 0.01) {
+          const [actR, actG, actB] = rgbRef.current || [255, 0, 0];
+          r = Math.min(255, r + actR * pressVal * 1.6);
+          g = Math.min(255, g + actG * pressVal * 1.6);
+          b = Math.min(255, b + actB * pressVal * 1.6);
+        }
+
         const peak = Math.max(r, g, b) / 255;
         const lit = peak > 0.012;
 
@@ -189,7 +204,7 @@ export default function KeyboardVisualizer({
       <div
         className="kb-chassis w-full max-w-5xl overflow-hidden shadow-2xl relative"
         style={{
-          aspectRatio: `${TOTAL_WIDTH_U} / ${TOTAL_HEIGHT_U}`,
+          aspectRatio: `${totalW} / ${totalH}`,
           padding: '1.4%',
           borderRadius: 20,
           background: 'linear-gradient(145deg, #e2e8f0 0%, #cbd5e1 50%, #94a3b8 100%)',
@@ -237,42 +252,44 @@ export default function KeyboardVisualizer({
           }}
         >
           {/* AULA Logo & RGB Light Bar (Right Plate above Arrow keys) */}
-          <div
-            style={{
-              ...getKeyStyle(15.55, 3.55, 3.15, 0.55),
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '6%',
-              padding: '0 2%',
-              pointerEvents: 'none',
-            }}
-          >
-            <span
+          {profile.brand === 'AULA' && (
+            <div
               style={{
-                fontFamily: "'Space Grotesk', system-ui, sans-serif",
-                fontSize: 'clamp(8px, 0.9vw, 12px)',
-                fontWeight: 900,
-                letterSpacing: '0.12em',
-                color: '#e2e8f0',
-                fontStyle: 'italic',
-                textShadow: '0 1px 2px rgba(0,0,0,0.9), 0 0 4px rgba(255,255,255,0.6)',
+                ...getKeyStyle(15.55, 3.55, 3.15, 0.55),
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '6%',
+                padding: '0 2%',
+                pointerEvents: 'none',
               }}
             >
-              AULA
-            </span>
-            <div
-              ref={lightBarRef}
-              style={{
-                flex: 1,
-                height: '35%',
-                borderRadius: 9999,
-                background: 'var(--accent)',
-                boxShadow: '0 0 8px var(--accent)',
-                transition: 'none',
-              }}
-            />
-          </div>
+              <span
+                style={{
+                  fontFamily: "'Space Grotesk', system-ui, sans-serif",
+                  fontSize: 'clamp(8px, 0.9vw, 12px)',
+                  fontWeight: 900,
+                  letterSpacing: '0.12em',
+                  color: '#e2e8f0',
+                  fontStyle: 'italic',
+                  textShadow: '0 1px 2px rgba(0,0,0,0.9), 0 0 4px rgba(255,255,255,0.6)',
+                }}
+              >
+                AULA
+              </span>
+              <div
+                ref={lightBarRef}
+                style={{
+                  flex: 1,
+                  height: '35%',
+                  borderRadius: 9999,
+                  background: 'var(--accent)',
+                  boxShadow: '0 0 8px var(--accent)',
+                  transition: 'none',
+                }}
+              />
+            </div>
+          )}
 
           {/* 87 3D Mechanical Keycaps with crisp legible text */}
           {keys.map(([idx, leftU, topU, widthU, heightU, label, subLabel]) => {

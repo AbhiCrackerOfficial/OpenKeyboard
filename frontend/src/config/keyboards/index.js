@@ -1,5 +1,5 @@
 // ─── Keyboard Profiles Registry ─────────────────────────────────────────────
-import { AULA_F87_PROFILE } from './aula-f87';
+import { AULA_F87_PROFILE } from './aula/f87';
 
 export const KEYBOARD_PROFILES = [
   AULA_F87_PROFILE,

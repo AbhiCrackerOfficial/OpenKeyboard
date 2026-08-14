@@ -114,6 +114,18 @@ export default function App() {
   useEffect(() => { rgbRef.current = rgb; }, [rgb]);
   useEffect(() => { audioAnalyserRef.current = audioAnalyser; }, [audioAnalyser]);
 
+  useEffect(() => {
+    const supportsAudio = profile.audioModes && profile.audioModes.length > 0;
+    if (!supportsAudio && activeTab === 'audio') {
+      setActiveTab('lighting');
+    }
+    const hasEffect = profile.effects.some(e => e.id === effectId);
+    if (!hasEffect) {
+      const firstValid = profile.effects.find(e => e.id !== 0) || profile.effects[0];
+      setEffectId(firstValid ? firstValid.id : 1);
+    }
+  }, [profile, activeTab, effectId]);
+
   const bytesToHex = (arr) => {
     return [...arr].map(x => x.toString(16).padStart(2, '0')).join(' ');
   };
@@ -194,33 +206,45 @@ export default function App() {
       [r3, g3, b3] = [realR, realG, realB];
     }
 
+    let displayR = r, displayG = g, displayB = b;
+    if (r + g + b < 90) {
+      displayR = 156; displayG = 163; displayB = 175; // premium gray fallback
+    }
+
+    let displayR2 = r2, displayG2 = g2, displayB2 = b2;
+    if (r2 + g2 + b2 < 90) {
+      displayR2 = 168; displayG2 = 85; displayB2 = 247; // default purple #a855f7 fallback
+    }
+
+    let displayR3 = r3, displayG3 = g3, displayB3 = b3;
+    if (r3 + g3 + b3 < 90) {
+      displayR3 = 236; displayG3 = 72; displayB3 = 153; // default pink #ec4899 fallback
+    }
+
     // Set document CSS properties dynamically
     document.documentElement.style.setProperty('--kb-r', r);
     document.documentElement.style.setProperty('--kb-g', g);
     document.documentElement.style.setProperty('--kb-b', b);
-    document.documentElement.style.setProperty('--accent', `rgb(${r}, ${g}, ${b})`);
-    document.documentElement.style.setProperty('--accent-rgb', `${r}, ${g}, ${b}`);
+    document.documentElement.style.setProperty('--accent', `rgb(${displayR}, ${displayG}, ${displayB})`);
+    document.documentElement.style.setProperty('--accent-rgb', `${displayR}, ${displayG}, ${displayB}`);
 
     // Dynamic text contrast for elements on top of --accent
-    const luminance1 = 0.299 * r + 0.587 * g + 0.114 * b;
-    const contrast1 = luminance1 > 140 ? '#0b0f19' : '#ffffff';
+    const contrast1 = (displayR < 127.5 && displayG < 127.5 && displayB < 127.5) ? '#ffffff' : '#0b0f19';
     document.documentElement.style.setProperty('--accent-contrast', contrast1);
 
     // Dynamic accent2 (coordinating PROFILE & CAPABILITIES / Diagnostics)
-    document.documentElement.style.setProperty('--accent2', `rgb(${r2}, ${g2}, ${b2})`);
-    document.documentElement.style.setProperty('--accent2-rgb', `${r2}, ${g2}, ${b2}`);
-    const luminance2 = 0.299 * r2 + 0.587 * g2 + 0.114 * b2;
-    const contrast2 = luminance2 > 140 ? '#0b0f19' : '#ffffff';
+    document.documentElement.style.setProperty('--accent2', `rgb(${displayR2}, ${displayG2}, ${displayB2})`);
+    document.documentElement.style.setProperty('--accent2-rgb', `${displayR2}, ${displayG2}, ${displayB2}`);
+    const contrast2 = (displayR2 < 127.5 && displayG2 < 127.5 && displayB2 < 127.5) ? '#ffffff' : '#0b0f19';
     document.documentElement.style.setProperty('--accent2-contrast', contrast2);
 
     // Dynamic accent3 (coordinating Audio tab components)
-    document.documentElement.style.setProperty('--accent3', `rgb(${r3}, ${g3}, ${b3})`);
-    document.documentElement.style.setProperty('--accent3-rgb', `${r3}, ${g3}, ${b3}`);
-    const luminance3 = 0.299 * r3 + 0.587 * g3 + 0.114 * b3;
-    const contrast3 = luminance3 > 140 ? '#0b0f19' : '#ffffff';
+    document.documentElement.style.setProperty('--accent3', `rgb(${displayR3}, ${displayG3}, ${displayB3})`);
+    document.documentElement.style.setProperty('--accent3-rgb', `${displayR3}, ${displayG3}, ${displayB3}`);
+    const contrast3 = (displayR3 < 127.5 && displayG3 < 127.5 && displayB3 < 127.5) ? '#ffffff' : '#0b0f19';
     document.documentElement.style.setProperty('--accent3-contrast', contrast3);
 
-    document.documentElement.style.setProperty('--glow', `rgba(${r}, ${g}, ${b}, ${effectId === 0 ? 0.14 : 0.35})`);
+    document.documentElement.style.setProperty('--glow', `rgba(${displayR}, ${displayG}, ${displayB}, ${effectId === 0 ? 0.14 : 0.35})`);
 
     localStorage.setItem('f87_rgb', JSON.stringify(rgb));
     const h = rgbToHex(rgb);
@@ -328,16 +352,31 @@ export default function App() {
       return;
     }
     navigator.hid.getDevices().then(list => {
-      const d = list.find(x => x.vendorId === profile.vid && x.productId === profile.pid);
-      if (!d) return;
-      d.open().then(() => {
-        hidRef.current = d;
+      let matchedDev = null;
+      let matchedProf = null;
+      for (const p of KEYBOARD_PROFILES) {
+        const found = list.find(x => x.vendorId === p.vid && x.productId === p.pid);
+        if (found) {
+          matchedDev = found;
+          matchedProf = p;
+          break;
+        }
+      }
+      if (!matchedDev) return;
+
+      setProfile(matchedProf);
+      matchedDev.open().then(() => {
+        hidRef.current = matchedDev;
         setConnected(true);
-        setDevName(d.productName || profile.name);
-        addLog('connect', `Auto-connected to ${d.productName || profile.name} via WebHID`);
+        setDevName(matchedDev.productName || matchedProf.name);
+        setTransportCaps({
+          audio88: hasOutputReport(matchedDev, 0x13),
+          direct520: hasFeatureReport(matchedDev, matchedProf.reportId),
+        });
+        addLog('connect', `Auto-connected to ${matchedDev.productName || matchedProf.name} via WebHID`);
         readConfig().then(raw => {
           if (!raw) return;
-          const s = profile.decodeState(raw);
+          const s = matchedProf.decodeState(raw);
           lastStateRef.current = s;
           setLastRawData(raw.slice(0, 32));
           setReadback(describeState(s));
@@ -1347,40 +1386,66 @@ export default function App() {
         {/* 1. Header */}
         <header className="panel" style={{ padding: '1.75rem 2rem' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1.25rem' }}>
               <div>
-                <div style={{ fontSize: '0.7rem', fontFamily: 'monospace', letterSpacing: '0.15em', color: 'var(--accent)', fontWeight: 700, marginBottom: '0.4rem' }}>
-                  {profile.name} · VID:0x{profile.vid.toString(16).toUpperCase()} PID:0x{profile.pid.toString(16).toUpperCase()}
+                <div style={{ fontSize: '0.7rem', fontFamily: 'monospace', letterSpacing: '0.15em', color: 'var(--accent)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>
+                  OpenKeyboard · Universal Controller
                 </div>
-                <h1 style={{ margin: 0, fontSize: 'clamp(1.6rem, 4vw, 3rem)', fontWeight: 900, letterSpacing: '-0.02em', color: 'var(--text)', lineHeight: 1 }}>
-                  Web Controller
+                <h1 style={{ margin: 0, fontSize: 'clamp(1.6rem, 4vw, 3.2rem)', fontWeight: 900, letterSpacing: '-0.04em', lineHeight: 1 }}>
+                  <span style={{ color: 'var(--text)', opacity: 0.92 }}>Open</span><span style={{ color: '#ffffff' }}>Keyboard</span>
                 </h1>
                 <p style={{ margin: '0.4rem 0 0', color: 'var(--text2)', fontSize: '0.85rem' }}>
-                  {profile.description}
+                  A universal open-source web controller for mechanical keyboards.
                 </p>
               </div>
 
-              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                {/* Profile Selector */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text3)', fontWeight: 800 }}>
+                    Active Keyboard
+                  </label>
+                  <select
+                    value={profile.id}
+                    onChange={(e) => {
+                      const matched = KEYBOARD_PROFILES.find(p => p.id === e.target.value);
+                      if (matched) {
+                        setProfile(matched);
+                        addLog('system', `Selected profile model: ${matched.name}`);
+                      }
+                    }}
+                    disabled={connected}
+                    className="app-select"
+                    style={{
+                      padding: '0.45rem 2.2rem 0.45rem 0.75rem',
+                      fontSize: '0.75rem',
+                      width: '210px',
+                      height: '35px',
+                      cursor: connected ? 'not-allowed' : 'pointer',
+                      opacity: connected ? 0.6 : 1,
+                    }}
+                  >
+                    {KEYBOARD_PROFILES.map(p => (
+                      <option key={p.id} value={p.id}>{p.brand} — {p.name}</option>
+                    ))}
+                  </select>
+                </div>
+
                 {!isInstalled && installPrompt && (
-                  <button className="btn btn-secondary" onClick={installApp} title="Install as a standalone desktop web app">
-                    <Download size={15} /> Install App
+                  <button className="btn btn-secondary" onClick={installApp} style={{ padding: '0.58rem 0.85rem' }} title="Install as a standalone desktop web app">
+                    <Download size={15} /> Install
                   </button>
-                )}
-                {isInstalled && (
-                  <span style={{ fontSize: '0.68rem', fontFamily: 'monospace', color: '#4ade80', fontWeight: 800 }}>
-                    INSTALLED PWA
-                  </span>
                 )}
                 {connected ? (<>
-                  <button className="btn btn-secondary" onClick={syncDevice} disabled={vizLoopRef.current} title="Read current config from keyboard">
-                    <RefreshCw size={15} /> Read Now
+                  <button className="btn btn-secondary" onClick={syncDevice} disabled={vizLoopRef.current} style={{ padding: '0.58rem 0.85rem' }} title="Read current config from keyboard">
+                    <RefreshCw size={15} /> Sync
                   </button>
-                  <button className="btn btn-danger" onClick={handleDisconnect}>
+                  <button className="btn btn-danger" onClick={handleDisconnect} style={{ padding: '0.58rem 0.85rem' }}>
                     <WifiOff size={15} /> Disconnect
                   </button>
                 </>) : (
-                  <button className="btn btn-primary" onClick={connectDevice} disabled={!supported}>
-                    <Wifi size={15} /> Connect Keyboard
+                  <button className="btn btn-primary" onClick={connectDevice} disabled={!supported} style={{ padding: '0.58rem 1.1rem' }}>
+                    <Wifi size={15} /> Connect Device
                   </button>
                 )}
               </div>
@@ -1447,17 +1512,23 @@ export default function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
           {/* Navigation Tabs */}
-          <div style={{ display: 'flex', gap: '0.25rem', borderBottom: `2px solid var(--border-alt)` }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', borderBottom: `2px solid var(--border-alt)`, paddingBottom: '0.85rem' }}>
             {[
               { id: 'lighting', icon: <Sliders size={14} />, label: 'Lighting' },
-              { id: 'audio', icon: <Volume2 size={14} />, label: 'Audio Visualizer' },
+              { id: 'audio', icon: <Volume2 size={14} />, label: 'Audio Visualizer', supported: profile.audioModes && profile.audioModes.length > 0 },
               { id: 'diagnostics', icon: <Terminal size={14} />, label: 'Diagnostics' },
-            ].map(t => (
+            ].filter(t => t.supported !== false).map(t => (
               <button
                 key={t.id}
-                className={`tab-btn ${activeTab === t.id ? 'active' : ''}`}
+                className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => setActiveTab(t.id)}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '0.55rem 1.1rem',
+                  fontSize: '0.72rem',
+                }}
               >
                 {t.icon} {t.label}
               </button>
