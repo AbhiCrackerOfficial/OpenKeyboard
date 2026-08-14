@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Palette, X, Sparkles, Sliders, Check, RefreshCw } from 'lucide-react';
+import { Palette, X, Sparkles } from 'lucide-react';
 import ToggleSwitch from './ToggleSwitch';
 import { rgbToHex, hexToRgb } from '../utils/colorUtils';
 
@@ -25,9 +25,11 @@ export default function FloatingColorBubble({
   connected,
   liveApply = true,
   disabled = false,
+  colorfulDisabled = false,
   styleMode = 'glass'
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true);
+  const [hexDraft, setHexDraft] = useState(hexColor || rgbToHex(rgb));
   const cardRef = useRef(null);
 
   // Close when clicking outside
@@ -45,6 +47,16 @@ export default function FloatingColorBubble({
 
   const [r, g, b] = rgb;
   const currentHex = hexColor || rgbToHex(rgb);
+  // The official AULA UI displays its hex text in BGR order. Keep our editor
+  // standards-correct (#RRGGBB) but show the OEM text as a reference.
+  const aulaDisplayHex = '#' + [b, g, r]
+    .map(v => Number(v).toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+
+  useEffect(() => {
+    setHexDraft(currentHex);
+  }, [currentHex]);
 
   const handleSliderChange = (channelIdx, val) => {
     const next = [...rgb];
@@ -58,11 +70,21 @@ export default function FloatingColorBubble({
   };
 
   const handleHexInput = (e) => {
-    const val = e.target.value;
-    const m = /^#?([0-9a-f]{6})$/i.exec(val.trim());
-    if (m) {
-      onColorChange(hexToRgb(val), '#' + m[1].toUpperCase());
+    const val = e.target.value.toUpperCase();
+    setHexDraft(val);
+    const m = /^#?([0-9A-F]{6})$/.exec(val.trim());
+    if (m) onColorChange(hexToRgb(val), '#' + m[1]);
+  };
+
+  const commitHexInput = () => {
+    const m = /^#?([0-9A-F]{6})$/.exec(hexDraft.trim());
+    if (!m) {
+      setHexDraft(currentHex);
+      return;
     }
+    const normalized = '#' + m[1];
+    setHexDraft(normalized);
+    onColorChange(hexToRgb(normalized), normalized);
   };
 
   return (
@@ -126,6 +148,7 @@ export default function FloatingColorBubble({
             <ToggleSwitch
               checked={colorful}
               onChange={onToggleColorful}
+              disabled={colorfulDisabled}
               label="Colorful Spectrum Mode"
               subLabel="Cycles rainbow hue spectrum"
               color="var(--accent)"
@@ -152,6 +175,7 @@ export default function FloatingColorBubble({
                 type="color"
                 value={currentHex.startsWith('#') ? currentHex.toLowerCase() : '#ff0000'}
                 onChange={handleColorPicker}
+                disabled={disabled}
                 style={{
                   position: 'absolute',
                   inset: 0,
@@ -171,11 +195,26 @@ export default function FloatingColorBubble({
                 className="app-input"
                 type="text"
                 maxLength={7}
-                value={currentHex}
+                value={hexDraft}
                 onChange={handleHexInput}
+                onBlur={commitHexInput}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                disabled={disabled}
                 style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.85rem', padding: '0.45rem 0.65rem' }}
               />
             </div>
+          </div>
+
+          <div style={{
+            marginTop: '-0.45rem',
+            marginBottom: '0.85rem',
+            fontSize: '0.66rem',
+            color: 'var(--text3)',
+            fontFamily: 'monospace',
+            lineHeight: 1.4,
+          }}>
+            RGB hex: <strong style={{ color: 'var(--text2)' }}>{currentHex}</strong>
+            {' · '}AULA OEM display: <strong style={{ color: 'var(--text2)' }}>{aulaDisplayHex}</strong>
           </div>
 
           {/* RGB Sliders */}
@@ -195,6 +234,7 @@ export default function FloatingColorBubble({
                   max={255}
                   value={rgb[i]}
                   onChange={(e) => handleSliderChange(i, e.target.value)}
+                  disabled={disabled}
                   style={{ flex: 1, accentColor: col }}
                 />
                 <span style={{ width: 26, textAlign: 'right', fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text2)' }}>
@@ -214,6 +254,7 @@ export default function FloatingColorBubble({
                 <button
                   key={p.name}
                   onClick={() => onColorChange(p.rgb, p.hex)}
+                  disabled={disabled}
                   title={p.name}
                   style={{
                     width: 26,
@@ -237,7 +278,7 @@ export default function FloatingColorBubble({
           {!liveApply && (
             <button
               className="btn btn-primary"
-              disabled={!connected}
+              disabled={!connected || disabled}
               onClick={onApplyPalette}
               style={{
                 width: '100%',

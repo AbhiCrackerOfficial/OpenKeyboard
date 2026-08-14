@@ -7,7 +7,9 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
-f87pro-controller.zip
+*.zip
+*.7z
+tmp/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 

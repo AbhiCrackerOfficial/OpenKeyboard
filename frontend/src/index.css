@@ -208,7 +208,7 @@ body {
 
 [data-style="glass"] .btn-primary {
   background: var(--accent);
-  color:      #ffffff;
+  color:      var(--accent-contrast, #ffffff);
   border-radius: 10px;
   box-shadow: 0 2px 14px rgba(var(--accent-rgb), 0.45);
 }
@@ -239,7 +239,7 @@ body {
 
 [data-style="neo"] .btn-primary {
   background:    var(--accent);
-  color:         #ffffff;
+  color:         var(--accent-contrast, #ffffff);
   border:        2px solid var(--border);
   box-shadow:    4px 4px 0 var(--border);
 }
@@ -396,4 +396,46 @@ body {
 @keyframes pulseDot {
   0%,100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
   50%      { box-shadow: 0 0 0 5px transparent; opacity: 0.8; }
+}
+
+/* Lighting OFF: keep navigation/device controls usable, but visually power down
+   the lighting system until a non-OFF effect is selected. */
+:root[data-lighting-off="true"] {
+  --accent: #6b7280;
+  --accent-rgb: 107, 114, 128;
+  --glow: rgba(107,114,128,0.18);
+  --kb-r: 107;
+  --kb-g: 114;
+  --kb-b: 128;
+}
+:root[data-lighting-off="true"] .lighting-powered-control {
+  opacity: 0.38;
+  filter: grayscale(1) saturate(0.15);
+}
+:root[data-lighting-off="true"] .lighting-powered-control input,
+:root[data-lighting-off="true"] .lighting-powered-control button,
+:root[data-lighting-off="true"] .lighting-powered-control select {
+  cursor: not-allowed;
+}
+:root[data-lighting-off="true"] .blob-1,
+:root[data-lighting-off="true"] .blob-2,
+:root[data-lighting-off="true"] .blob-3 {
+  filter: blur(90px) grayscale(1) !important;
+  opacity: 0.45;
+}
+
+.per-key-toolbar {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.per-key-toolbar .btn.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@keyframes indicatorPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.9); }
 }

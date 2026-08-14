@@ -14,7 +14,6 @@ export default {
 		if (url.pathname === '/api/status') {
 			return new Response(JSON.stringify({
 				status: 'online',
-				platform: 'Cloudflare Workers',
 				device: 'AULA F87 / F87 Pro Web Controller',
 				timestamp: new Date().toISOString()
 			}), {

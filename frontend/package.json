@@ -1,13 +1,14 @@
 {
-  "name": "frontend",
+  "name": "aula-f87-pro-web-controller",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "npm run lint && npm run build"
   },
   "dependencies": {
     "lucide-react": "^1.31.0",
@@ -22,5 +23,6 @@
     "oxlint": "^1.75.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.2.0"
-  }
+  },
+  "description": "Installable WebHID controller for AULA F87 / F87 Pro"
 }

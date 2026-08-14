@@ -19,11 +19,14 @@ export const AULA_F87_PROFILE = {
     readInit: 0x84,
     writeConfig: 0x04,
     palette: 0x0A,
+    selfDefine: 0x06,
     directRgb: 0x08,
   },
   effectOffset: 18,
 
-  // Effects supported by hardware
+  // Effects supported by hardware.
+  // IDs 0..18 are the OEM firmware effects. ID 21 is the OEM Self-Define /
+  // per-key RGB mode captured from the official Windows software.
   effects: [
     { id: 0,  name: "OFF",                speed: false, color: false, colorfulOnly: false },
     { id: 1,  name: "Fixed On",           speed: false, color: true,  colorful: false     },
@@ -40,7 +43,9 @@ export const AULA_F87_PROFILE = {
     { id: 15, name: "Rotating Windmill",  speed: true,  color: false, colorfulOnly: true  },
     { id: 16, name: "Colorful Waterfall", speed: true,  color: false, colorfulOnly: true  },
     { id: 17, name: "Blossoming",         speed: true,  color: false, colorfulOnly: true  },
+    { id: 21, name: "Self Define / Per-Key", speed: false, color: true, colorful: false, perKey: true },
   ],
+
 
   // Audio visualization styles
   audioModes: [
@@ -193,6 +198,8 @@ export const AULA_F87_PROFILE = {
       b = raw[o];
       s = (raw[o + 1] >> 4) & 0x0f;
       c = (raw[o + 1] & 0x0f) === 0x07;
+    } else if (id === 21) {
+      b = null; s = null; c = false;
     }
     return { id, brightness: b, speed: s, colorful: c, raw };
   },
@@ -203,7 +210,12 @@ export const AULA_F87_PROFILE = {
     b[0] = this.reportId;
     b[1] = this.commands.writeConfig;
     b[this.effectOffset] = req.effect.id;
+    if (req.effect.perKey) {
+      b[17] = 0x01;
+      return b;
+    }
     if (req.effect.id !== 0) {
+      b[17] = 0x00;
       const o = this.effectPairOffset(req.effect.id);
       b[o] = req.brightness;
       const oldSpd = (b[o + 1] >> 4) & 0x0f;
@@ -212,17 +224,93 @@ export const AULA_F87_PROFILE = {
       if (req.effect.colorfulOnly) mode = 0x07;
       else if (req.effect.colorful) mode = req.colorful ? 0x07 : 0x00;
       b[o + 1] = ((spd & 0x0f) << 4) | mode;
+    } else {
+      b[17] = 0x00;
     }
     return b;
   },
 
-  buildPaletteReport(rgb) {
+  /**
+   * Build the OEM 0x0A palette report for the SELECTED effect.
+   *
+   * Packet captures prove custom RGB is effect-specific, not global.
+   * Each effect owns a 21-byte palette block:
+   *   effect 1  -> RGB at 29..31
+   *   effect 5  -> RGB at 113..115 (Raindrops capture)
+   *   effect 13 -> RGB at 281..283 (Sine Wave capture)
+   *
+   * Formula: 29 + (effectId - 1) * 21.
+   */
+  paletteColorOffset(effectId) {
+    if (effectId < 1 || effectId > 18) return null;
+    const offset = 29 + (effectId - 1) * 21;
+    return offset + 2 < this.reportSize ? offset : null;
+  },
+
+  buildPaletteReport(rgb, effectId = 1, knownEffectColors = null) {
     const template = hexToBytes(this.paletteHex);
     const p = new Uint8Array(template);
-    p[29] = rgb[0];
-    p[30] = rgb[1];
-    p[31] = rgb[2];
+
+    // Re-apply colors previously chosen in this frontend so changing another
+    // effect does not reset earlier custom palettes back to template defaults.
+    if (knownEffectColors) {
+      Object.entries(knownEffectColors).forEach(([idText, color]) => {
+        const id = Number(idText);
+        const o = this.paletteColorOffset(id);
+        if (o === null || !Array.isArray(color) || color.length < 3) return;
+        p[o] = color[0];
+        p[o + 1] = color[1];
+        p[o + 2] = color[2];
+      });
+    }
+
+    const offset = this.paletteColorOffset(effectId);
+    if (offset !== null) {
+      p[offset] = rgb[0];
+      p[offset + 1] = rgb[1];
+      p[offset + 2] = rgb[2];
+    }
     return p;
+  },
+
+  /**
+   * OEM Self-Define / per-key report captured from the official app.
+   * RGB planes are 126 bytes each.
+   */
+  buildSelfDefineReport(keyColors = {}) {
+    const f = new Uint8Array(this.reportSize);
+    f[0] = this.reportId;
+    f[1] = this.commands.selfDefine;
+    f[4] = 0x01;
+    f[6] = 0x80;
+    f[7] = 0x01;
+    const entries = keyColors instanceof Map ? [...keyColors.entries()] : Object.entries(keyColors || {});
+    for (const [idxText, color] of entries) {
+      const idx = Number(idxText);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= 126 || !Array.isArray(color) || color.length < 3) continue;
+      f[8 + idx] = color[0] & 0xff;
+      f[134 + idx] = color[1] & 0xff;
+      f[260 + idx] = color[2] & 0xff;
+    }
+    return f;
+  },
+
+  selfDefineGamingDefault() {
+    const out = {};
+    [0, 9, 14, 15, 21, 89, 94, 95, 101].forEach(idx => { out[idx] = [255, 0, 0]; });
+    return out;
+  },
+
+  buildDirectEnableSequence() {
+    return [
+      { reportId: 0x39, data: [0x20, 0x06, 0x00, 0x01, 0x00] },
+      { reportId: 0x3c, data: [0x20, 0x01, 0x00] },
+      { reportId: 0x39, data: [0x20, 0x06, 0x01, 0x01, 0x00] },
+    ];
+  },
+
+  buildDirectDisableReport() {
+    return { reportId: 0x3c, data: [0x20, 0x00, 0x00] };
   },
 
   buildDirectFrame(colorsMap) {

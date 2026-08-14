@@ -1,19 +1,20 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Wifi, WifiOff, Sliders, Volume2, Terminal,
   Sun, Gauge, Mic, Monitor, Square, Play,
   Trash2, RefreshCw, Activity, Layers, Info,
-  Moon, SunMedium, Palette, Sparkles, ChevronDown, Check,
-  Cpu, HardDrive, Zap, Radio
+  Palette, Sparkles, Cpu, Download, Paintbrush, Eraser, X
 } from 'lucide-react';
 import KeyboardVisualizer from './components/KeyboardVisualizer';
 import FloatingColorBubble from './components/FloatingColorBubble';
 import ToggleSwitch from './components/ToggleSwitch';
 import { KEYBOARD_PROFILES, DEFAULT_KEYBOARD_PROFILE, findKeyboardProfile } from './config/keyboards';
-import { hsv, hexFmt, rgbToHex, hexToRgb } from './utils/colorUtils';
+import { hexFmt, rgbToHex } from './utils/colorUtils';
+import { renderAudioFrame, smoothingFromUi } from './utils/renderEngine';
+import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport } from './utils/streamProtocol';
 
-const DEBOUNCE_MS = 550;
-const AUTO_SYNC_INTERVAL_MS = 3000;
+const DEBOUNCE_MS = 1000;
+const AUTO_SYNC_INTERVAL_MS = 1000;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const ls = (k, fb) => { try { return JSON.parse(localStorage.getItem(k)) ?? fb; } catch { return fb; } };
@@ -32,56 +33,98 @@ export default function App() {
 
   // ── Connection ────────────────────────────────────────────────────────────
   const [connected, setConnected] = useState(false);
-  const [devName,   setDevName]   = useState('');
+  const [devName, setDevName] = useState('');
   const [supported, setSupported] = useState(true);
 
   // ── Lighting Settings (Default to Red #FF0000 as per Requirement #5) ──────
-  const [effectId,   setEffectId]   = useState(() => ls('f87_effectId', 1));
+  const [effectId, setEffectId] = useState(() => ls('f87_effectId', 1));
   const [brightness, setBrightness] = useState(() => ls('f87_brightness', 4));
-  const [speed,      setSpeed]      = useState(() => ls('f87_speed', 4));
-  const [colorful,   setColorful]   = useState(() => ls('f87_colorful', false));
-  const [rgb,        setRgb]        = useState(() => ls('f87_rgb', [255, 0, 0]));
-  const [hexColor,   setHexColor]   = useState(() => ls('f87_hex', '#FF0000'));
+  const [speed, setSpeed] = useState(() => ls('f87_speed', 4));
+  const [colorful, setColorful] = useState(() => ls('f87_colorful', false));
+  const [rgb, setRgb] = useState(() => ls('f87_rgb', [255, 0, 0]));
+  const [hexColor, setHexColor] = useState(() => ls('f87_hex', '#FF0000'));
+  const [effectColors, setEffectColors] = useState(() => ls('f87_effectColors', {}));
+  const [perKeyColors, setPerKeyColors] = useState(() => ls('f87_perKeyColors', {}));
+  const [perKeyErase, setPerKeyErase] = useState(false);
 
   // ── Audio ──────────────────────────────────────────────────────────────────
-  const [audioSrc,      setAudioSrc]      = useState('none');
+  const [audioSrc, setAudioSrc] = useState('none');
   const [audioAnalyser, setAudioAnalyser] = useState(null);
-  const [audioMode,     setAudioMode]     = useState('Audio dance – soft');
-  const [audioGain,     setAudioGain]     = useState(1.5);
-  const [audioSmooth,   setAudioSmooth]   = useState(12);
-  const [vizRunning,    setVizRunning]    = useState(false);
+  const [audioMode, setAudioMode] = useState('Audio dance – soft');
+  const [audioGain, setAudioGain] = useState(1.5);
+  const [audioSmooth, setAudioSmooth] = useState(12);
+  const [vizRunning, setVizRunning] = useState(false);
+  // Only the two REAL transports are selectable. Automatic fallback is a
+  // separate behavior toggle, not a fake third transport.
+  const [audioTransport, setAudioTransport] = useState(() => ls('f87_audioTransport', 'audio88') === 'direct520' ? 'direct520' : 'audio88');
+  const [audioFallback, setAudioFallback] = useState(() => ls('f87_audioFallback', true));
+  const [audioColorful, setAudioColorful] = useState(true);
+  const [backgroundEngine, setBackgroundEngine] = useState('idle');
+  const [transportCaps, setTransportCaps] = useState({ audio88: null, direct520: null });
 
   // ── Misc ────────────────────────────────────────────────────────────────────
-  const [autoSync,    setAutoSync]    = useState(true);
-  const [liveApply,   setLiveApply]   = useState(true);
-  const [logs,        setLogs]        = useState([]);
-  const [readback,    setReadback]    = useState('—');
+  const [realtimeSync, setRealtimeSync] = useState(true);
+  const [showSyncInfo, setShowSyncInfo] = useState(false);
+  const [logs, setLogs] = useState([]);
+  const [readback, setReadback] = useState('—');
   const [lastRawData, setLastRawData] = useState(null);
-  const [showInfo,    setShowInfo]    = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templates, setTemplates] = useState(() => ls('f87_custom_templates', []));
+  const [txStatus, setTxStatus] = useState('idle');
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [isInstalled, setIsInstalled] = useState(
+    () => window.matchMedia?.('(display-mode: standalone)')?.matches || false
+  );
 
   // ── Live Mutable Refs ───────────────────────────────────────────────────
-  const hidRef           = useRef(null);
-  const ioBusyRef        = useRef(false);
+  const hidRef = useRef(null);
+  const ioBusyRef = useRef(false);
   const lastWriteTimeRef = useRef(0);
-  const liveTimerRef     = useRef(null);
-  const audioCtxRef      = useRef(null);
-  const audioStrRef      = useRef(null);
-  const vizLoopRef       = useRef(false);
-  const lastStateRef     = useRef(null);
-  const logRef           = useRef(null);
-  const specCanvasRef    = useRef(null);
+  const liveTimerRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const audioStrRef = useRef(null);
+  const vizLoopRef = useRef(false);
+  const lastStateRef = useRef(null);
+  const logRef = useRef(null);
+  const specCanvasRef = useRef(null);
+  const suppressLiveRef = useRef(false);
+  const pendingWriteRef = useRef(null);
+  const writeLoopRef = useRef(false);
+  const streamTransportRef = useRef(null);
+  const audioWorkletNodeRef = useRef(null);
+  const hidWorkerRef = useRef(null);
+  const workerAudioChannelRef = useRef(null);
+  const workerActiveRef = useRef(false);
+  const debugModeRef = useRef(debugMode);
 
-  const audioModeRef     = useRef(audioMode);
-  const audioGainRef     = useRef(audioGain);
-  const colorfulRef      = useRef(colorful);
-  const rgbRef           = useRef(rgb);
+  const audioModeRef = useRef(audioMode);
+  const audioGainRef = useRef(audioGain);
+  const audioColorfulRef = useRef(audioColorful);
+  const colorfulRef = useRef(colorful);
+  const rgbRef = useRef(rgb);
   const audioAnalyserRef = useRef(audioAnalyser);
 
+  useEffect(() => { debugModeRef.current = debugMode; }, [debugMode]);
   useEffect(() => { audioModeRef.current = audioMode; }, [audioMode]);
   useEffect(() => { audioGainRef.current = audioGain; }, [audioGain]);
+  useEffect(() => { audioColorfulRef.current = audioColorful; }, [audioColorful]);
   useEffect(() => { colorfulRef.current = colorful; }, [colorful]);
   useEffect(() => { rgbRef.current = rgb; }, [rgb]);
   useEffect(() => { audioAnalyserRef.current = audioAnalyser; }, [audioAnalyser]);
+
+  const bytesToHex = (arr) => {
+    return [...arr].map(x => x.toString(16).padStart(2, '0')).join(' ');
+  };
+
+  useEffect(() => {
+    if (!hidWorkerRef.current || !workerActiveRef.current) return;
+    hidWorkerRef.current.postMessage({
+      type: 'settings',
+      settings: { mode: audioMode, gain: audioGain, colorful: audioColorful, rgb },
+    });
+  }, [audioMode, audioGain, audioColorful, rgb]);
 
   const activeEffect = profile.effects.find(e => e.id === effectId) || profile.effects[1];
 
@@ -96,19 +139,93 @@ export default function App() {
   }, [themeMode, styleMode]);
 
   useEffect(() => {
-    const [r, g, b] = rgb;
-    // Dynamically adjust whole-site CSS color tokens to active keyboard RGB
+    document.documentElement.dataset.lightingOff = effectId === 0 ? 'true' : 'false';
+  }, [effectId]);
+
+  useEffect(() => {
+    let r = 255, g = 0, b = 0;
+    let r2 = 168, g2 = 85, b2 = 247; // Default purple #a855f7
+    let r3 = 236, g3 = 72, b3 = 153; // Default pink #ec4899
+
+    const [realR, realG, realB] = rgb;
+
+    if (effectId === 0) {
+      // Powered down (grey accents)
+      r = 107; g = 114; b = 128;
+      r2 = 120; g2 = 120; b2 = 120;
+      r3 = 130; g3 = 130; b3 = 130;
+    } else if (effectId === 21 && Object.keys(perKeyColors).length > 0) {
+      // Count frequencies of rgb colors in perKeyColors
+      const counts = {};
+      Object.values(perKeyColors).forEach(color => {
+        if (!Array.isArray(color) || color.length < 3) return;
+        const key = color.slice(0, 3).join(',');
+        counts[key] = (counts[key] || 0) + 1;
+      });
+
+      // Sort colors by frequency descending
+      const sorted = Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([key]) => key.split(',').map(Number));
+
+      if (sorted[0]) {
+        [r, g, b] = sorted[0];
+      } else {
+        [r, g, b] = [realR, realG, realB];
+      }
+
+      if (sorted[1]) {
+        [r2, g2, b2] = sorted[1];
+      } else {
+        // Fallback to primary dominant
+        [r2, g2, b2] = [r, g, b];
+      }
+
+      if (sorted[2]) {
+        [r3, g3, b3] = sorted[2];
+      } else {
+        // Fallback to secondary dominant
+        [r3, g3, b3] = [r2, g2, b2];
+      }
+    } else {
+      // Standard preset mode: coordinate all accents to primary selected color
+      [r, g, b] = [realR, realG, realB];
+      [r2, g2, b2] = [realR, realG, realB];
+      [r3, g3, b3] = [realR, realG, realB];
+    }
+
+    // Set document CSS properties dynamically
     document.documentElement.style.setProperty('--kb-r', r);
     document.documentElement.style.setProperty('--kb-g', g);
     document.documentElement.style.setProperty('--kb-b', b);
     document.documentElement.style.setProperty('--accent', `rgb(${r}, ${g}, ${b})`);
     document.documentElement.style.setProperty('--accent-rgb', `${r}, ${g}, ${b}`);
-    document.documentElement.style.setProperty('--glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+
+    // Dynamic text contrast for elements on top of --accent
+    const luminance1 = 0.299 * r + 0.587 * g + 0.114 * b;
+    const contrast1 = luminance1 > 140 ? '#0b0f19' : '#ffffff';
+    document.documentElement.style.setProperty('--accent-contrast', contrast1);
+
+    // Dynamic accent2 (coordinating PROFILE & CAPABILITIES / Diagnostics)
+    document.documentElement.style.setProperty('--accent2', `rgb(${r2}, ${g2}, ${b2})`);
+    document.documentElement.style.setProperty('--accent2-rgb', `${r2}, ${g2}, ${b2}`);
+    const luminance2 = 0.299 * r2 + 0.587 * g2 + 0.114 * b2;
+    const contrast2 = luminance2 > 140 ? '#0b0f19' : '#ffffff';
+    document.documentElement.style.setProperty('--accent2-contrast', contrast2);
+
+    // Dynamic accent3 (coordinating Audio tab components)
+    document.documentElement.style.setProperty('--accent3', `rgb(${r3}, ${g3}, ${b3})`);
+    document.documentElement.style.setProperty('--accent3-rgb', `${r3}, ${g3}, ${b3}`);
+    const luminance3 = 0.299 * r3 + 0.587 * g3 + 0.114 * b3;
+    const contrast3 = luminance3 > 140 ? '#0b0f19' : '#ffffff';
+    document.documentElement.style.setProperty('--accent3-contrast', contrast3);
+
+    document.documentElement.style.setProperty('--glow', `rgba(${r}, ${g}, ${b}, ${effectId === 0 ? 0.14 : 0.35})`);
 
     localStorage.setItem('f87_rgb', JSON.stringify(rgb));
     const h = rgbToHex(rgb);
     localStorage.setItem('f87_hex', JSON.stringify(h));
-  }, [rgb]);
+  }, [rgb, effectId, perKeyColors]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Human-Readable Diagnostics Logging (Requirement #6)
@@ -128,36 +245,78 @@ export default function App() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
+  useEffect(() => {
+    const onBeforeInstall = event => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    const onInstalled = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+      addLog('system', 'Web app installed successfully.');
+    };
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  const installApp = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    await installPrompt.userChoice.catch(() => null);
+    setInstallPrompt(null);
+  };
+
 
   // ─────────────────────────────────────────────────────────────────────────
   // Persistence
   // ─────────────────────────────────────────────────────────────────────────
-  useEffect(() => { localStorage.setItem('f87_effectId',   JSON.stringify(effectId));   }, [effectId]);
+  useEffect(() => { localStorage.setItem('f87_effectId', JSON.stringify(effectId)); }, [effectId]);
   useEffect(() => { localStorage.setItem('f87_brightness', JSON.stringify(brightness)); }, [brightness]);
-  useEffect(() => { localStorage.setItem('f87_speed',      JSON.stringify(speed));      }, [speed]);
-  useEffect(() => { localStorage.setItem('f87_colorful',   JSON.stringify(colorful));   }, [colorful]);
+  useEffect(() => { localStorage.setItem('f87_speed', JSON.stringify(speed)); }, [speed]);
+  useEffect(() => { localStorage.setItem('f87_colorful', JSON.stringify(colorful)); }, [colorful]);
+  useEffect(() => { localStorage.setItem('f87_effectColors', JSON.stringify(effectColors)); }, [effectColors]);
+  useEffect(() => { localStorage.setItem('f87_perKeyColors', JSON.stringify(perKeyColors)); }, [perKeyColors]);
+  useEffect(() => { localStorage.setItem('f87_audioTransport', JSON.stringify(audioTransport)); }, [audioTransport]);
+  useEffect(() => { localStorage.setItem('f87_audioFallback', JSON.stringify(audioFallback)); }, [audioFallback]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Smooth Live Apply Debounce (Prevents Device Write Flooding)
+  // Smooth Live Apply Debounce
+  // Programmatic Auto-Sync updates are suppressed so a READ never causes an
+  // unnecessary READ -> UI -> WRITE feedback loop.
   // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!liveApply || !connected || vizLoopRef.current) return;
+    if (effectId === 21 || suppressLiveRef.current || !realtimeSync || !connected || vizLoopRef.current) return;
     clearTimeout(liveTimerRef.current);
     liveTimerRef.current = setTimeout(() => {
-      writeConfig('live').catch(() => {});
+      writeConfig('live').catch(() => { });
     }, DEBOUNCE_MS);
     return () => clearTimeout(liveTimerRef.current);
-  }, [effectId, brightness, speed, colorful, rgb, liveApply, connected]);
+  }, [effectId, brightness, speed, colorful, rgb, realtimeSync, connected]);
+
+  // Self-Define live apply only reacts to painted key data. Changing the
+  // floating RGB picker changes the brush color, not existing keys.
+  useEffect(() => {
+    if (effectId !== 21 || suppressLiveRef.current || !realtimeSync || !connected || vizLoopRef.current) return;
+    clearTimeout(liveTimerRef.current);
+    liveTimerRef.current = setTimeout(() => {
+      writeConfig('per-key-live').catch(() => { });
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(liveTimerRef.current);
+  }, [perKeyColors, effectId, realtimeSync, connected]);
 
   // Smooth Periodic Auto Sync (Runs only when completely idle)
   useEffect(() => {
-    if (!connected || !autoSync) return;
+    if (!connected || !realtimeSync) return;
     const id = setInterval(() => {
       if (Date.now() - lastWriteTimeRef.current < 2000 || vizLoopRef.current) return;
       syncDevice();
     }, AUTO_SYNC_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [connected, autoSync]);
+  }, [connected, realtimeSync, profile, effectColors]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // WebHID Connection & Auto Reconnect
@@ -184,8 +343,8 @@ export default function App() {
           setReadback(describeState(s));
           applyStateToUI(s);
           addLog('read', `Initial state synchronized: Effect = ${getEffectName(s.id)}, Brightness = ${s.brightness}/4, Speed = ${s.speed}/4, Mode = ${s.colorful ? 'Rainbow' : 'Single-color'}`);
-        }).catch(() => {});
-      }).catch(() => {});
+        }).catch(() => { });
+      }).catch(() => { });
     });
 
     navigator.hid.addEventListener('disconnect', ev => {
@@ -201,27 +360,100 @@ export default function App() {
   // Spectrum Canvas Drawer
   // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!audioAnalyser || activeTab !== 'audio') return;
     let animId = null;
-    const buf = new Uint8Array(audioAnalyser.frequencyBinCount);
     const canvas = specCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
+    const buf = audioAnalyser ? new Uint8Array(audioAnalyser.frequencyBinCount) : null;
+    let phase = 0;
+
     const draw = () => {
-      audioAnalyser.getByteFrequencyData(buf);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const barW = canvas.width / buf.length;
-      for (let i = 0; i < buf.length; i++) {
-        const barH = (buf[i] / 255) * canvas.height;
-        ctx.fillStyle = `hsl(${(i / buf.length) * 240 + 100}, 85%, 60%)`;
-        ctx.fillRect(i * barW, canvas.height - barH, Math.max(1, barW - 1), barH);
+
+      // Draw subtle background grid
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+      ctx.lineWidth = 1;
+      const gridSize = 20;
+      for (let x = 0; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
       }
+      for (let y = 0; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      const rootStyle = getComputedStyle(document.documentElement);
+      const accent3Str = rootStyle.getPropertyValue('--accent3').trim() || 'rgb(236, 72, 153)';
+      const accent3RgbStr = rootStyle.getPropertyValue('--accent3-rgb').trim() || '236, 72, 153';
+
+      if (audioAnalyser && vizRunning && buf) {
+        // Active Audio Visualization
+        audioAnalyser.getByteFrequencyData(buf);
+
+        ctx.save();
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = accent3Str;
+
+        const totalBars = 64;
+        const barW = canvas.width / totalBars;
+        const step = Math.max(1, Math.floor(buf.length / totalBars));
+
+        for (let i = 0; i < totalBars; i++) {
+          const val = buf[i * step] || 0;
+          const barH = (val / 255) * canvas.height * 0.85;
+
+          // Premium linear gradient using dynamic accent3 color
+          const grad = ctx.createLinearGradient(0, canvas.height - barH, 0, canvas.height);
+          grad.addColorStop(0, accent3Str);
+          grad.addColorStop(1, `rgba(${accent3RgbStr}, 0.15)`);
+
+          ctx.fillStyle = grad;
+          ctx.fillRect(i * barW, canvas.height - barH, Math.max(1.5, barW - 2.5), barH);
+        }
+        ctx.restore();
+      } else {
+        // Idle state: Slow, beautiful ambient wave
+        phase += 0.025;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = accent3Str;
+        ctx.beginPath();
+
+        for (let x = 0; x < canvas.width; x++) {
+          const breath = Math.sin(phase * 0.55) * 0.5 + 0.5;
+          const amp = 12 + breath * 14;
+          const y = canvas.height / 2 + Math.sin(x * 0.02 + phase) * amp * Math.sin(x * Math.PI / canvas.width);
+
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+
+        ctx.strokeStyle = accent3Str;
+        ctx.stroke();
+        ctx.restore();
+
+        // Subtly print status text in the center
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.font = '700 8px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('ENGINE ONLINE — AWAITING AUDIO', canvas.width / 2, canvas.height - 20);
+      }
+
       animId = requestAnimationFrame(draw);
     };
+
     draw();
     return () => cancelAnimationFrame(animId);
-  }, [audioAnalyser, activeTab]);
+  }, [audioAnalyser, vizRunning, activeTab]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Protocol helpers
@@ -230,6 +462,9 @@ export default function App() {
     if (!hidRef.current) throw new Error('Keyboard not connected.');
     if (full.length !== profile.reportSize)
       throw new Error(`Expected ${profile.reportSize} bytes, got ${full.length}.`);
+    if (debugModeRef.current) {
+      addLog('debug', `HID OUT [${full[0].toString(16).padStart(2, '0')}] ${bytesToHex(full.slice(1, 32))}...`);
+    }
     await hidRef.current.sendFeatureReport(full[0], full.slice(1));
   };
 
@@ -247,10 +482,13 @@ export default function App() {
     await sendReport(profile.buildReadInit());
     await sleep(38);
     const view = await hidRef.current.receiveFeatureReport(profile.reportId);
-    const raw  = normaliseBody(view);
+    const raw = normaliseBody(view);
     if (raw.length < 136) throw new Error(`Feature read returned only ${raw.length} bytes.`);
     if (raw[0] !== profile.reportId || raw[1] !== profile.commands.readInit)
-      throw new Error(`Unexpected config header: ${hexFmt(raw.slice(0,8))}`);
+      throw new Error(`Unexpected config header: ${hexFmt(raw.slice(0, 8))}`);
+    if (debugModeRef.current) {
+      addLog('debug', `HID IN  [${raw[0].toString(16).padStart(2, '0')}] ${bytesToHex(raw.slice(1, 32))}...`);
+    }
     return raw;
   };
 
@@ -260,16 +498,27 @@ export default function App() {
   };
 
   const describeState = s => {
-    return `${getEffectName(s.id)} · Brightness: ${s.brightness ?? '?'}/4 · Speed: ${s.speed ?? '?'}/4 · ${s.colorful ? 'Rainbow' : 'Single-color'}`;
+    if (s.id === 0) return 'OFF · Keyboard lighting disabled';
+    if (s.id === 21) return 'Self Define / Per-Key RGB';
+    return `${getEffectName(s.id)} · Brightness: ${s.brightness ?? '?'}/4 · Speed: ${s.speed ?? '?'}/4 · ${s.colorful ? 'Colorful' : 'Single-color'}`;
   };
 
   const applyStateToUI = s => {
     const found = profile.effects.find(e => e.id === s.id);
     if (!found) return;
+    suppressLiveRef.current = true;
     setEffectId(s.id);
+    const remembered = effectColors[s.id];
+    if (Array.isArray(remembered) && remembered.length >= 3) {
+      const nextRgb = remembered.slice(0, 3);
+      setRgb(nextRgb);
+      setHexColor(rgbToHex(nextRgb));
+    }
     if (s.brightness !== null) setBrightness(Math.max(0, Math.min(4, s.brightness)));
-    if (s.speed      !== null) setSpeed(Math.max(0, Math.min(4, s.speed)));
-    if (s.colorful   !== null) setColorful(!!s.colorful);
+    if (s.speed !== null) setSpeed(Math.max(0, Math.min(4, s.speed)));
+    if (s.colorful !== null) setColorful(!!s.colorful);
+    // Keep suppression through React's effect flush.
+    setTimeout(() => { suppressLiveRef.current = false; }, 80);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -288,13 +537,17 @@ export default function App() {
 
       if (!d.opened) await d.open();
       hidRef.current = d;
+      setTransportCaps({
+        audio88: hasOutputReport(d, 0x13),
+        direct520: hasFeatureReport(d, matchedProfile.reportId),
+      });
       setConnected(true);
       setDevName(d.productName || matchedProfile.name);
       addLog('connect', `Connected to ${d.productName || matchedProfile.name}`);
-      
+
       ioBusyRef.current = true;
       const raw = await readConfig();
-      const s   = matchedProfile.decodeState(raw);
+      const s = matchedProfile.decodeState(raw);
       lastStateRef.current = s;
       setLastRawData(raw.slice(0, 32));
       setReadback(describeState(s));
@@ -308,8 +561,9 @@ export default function App() {
   const handleDisconnect = () => {
     stopVisualizerLoop();
     stopAudioCapture(false);
-    if (hidRef.current?.opened) hidRef.current.close().catch(()=>{});
+    if (hidRef.current?.opened) hidRef.current.close().catch(() => { });
     hidRef.current = null;
+    setTransportCaps({ audio88: null, direct520: null });
     setConnected(false);
     setDevName('');
     setReadback('—');
@@ -321,10 +575,10 @@ export default function App() {
     ioBusyRef.current = true;
     try {
       const raw = await readConfig();
-      const s   = profile.decodeState(raw);
+      const s = profile.decodeState(raw);
       setLastRawData(raw.slice(0, 32));
       const changed = !lastStateRef.current ||
-        ['id','brightness','speed','colorful'].some(k => lastStateRef.current[k] !== s[k]);
+        ['id', 'brightness', 'speed', 'colorful'].some(k => lastStateRef.current[k] !== s[k]);
       lastStateRef.current = s;
       const desc = describeState(s);
       setReadback(desc);
@@ -337,75 +591,198 @@ export default function App() {
     } finally { ioBusyRef.current = false; }
   };
 
-  const writeConfig = async (src = 'manual', colorOnly = false) => {
-    if (!connected || ioBusyRef.current || vizLoopRef.current) return;
+  const performWrite = async (job) => {
+    const { src, colorOnly, snapshot } = job;
+    const jobEffect = profile.effects.find(e => e.id === snapshot.effectId) || profile.effects[1];
     ioBusyRef.current = true;
     lastWriteTimeRef.current = Date.now();
+    setTxStatus('sending');
+
     try {
       addLog('write', `Writing settings (${src})${colorOnly ? ' — Palette Only' : ''}`, {
-        effect: activeEffect.name,
-        brightness: `${brightness}/4`,
-        speed: `${speed}/4`,
-        mode: colorful ? 'Rainbow Spectrum' : 'Single-color (Custom RGB)',
-        rgb: rgbToHex(rgb),
+        effect: jobEffect.name,
+        brightness: `${snapshot.brightness}/4`,
+        speed: `${snapshot.speed}/4`,
+        mode: snapshot.colorful ? 'Rainbow Spectrum' : 'Single-color (Custom RGB)',
+        rgb: rgbToHex(snapshot.rgb),
       });
 
       const currentRaw = await readConfig();
       let cfgReport;
-      if (colorOnly) {
-        cfgReport = new Uint8Array(profile.reportSize);
-        cfgReport.set(currentRaw.slice(0, Math.min(currentRaw.length, profile.reportSize)));
-        cfgReport[0] = profile.reportId;
-        cfgReport[1] = profile.commands.writeConfig;
-        if (activeEffect.id !== 0 && activeEffect.color) {
-          const o = profile.effectPairOffset(activeEffect.id);
-          const spd = (cfgReport[o+1] >> 4) & 0x0f;
-          cfgReport[o+1] = (spd << 4) | 0x00;
-        }
-      } else {
-        cfgReport = profile.buildConfigWrite(currentRaw, {
-          effect: activeEffect,
-          brightness,
-          speed,
-          colorful,
-          rgb,
-        });
-      }
-      const palette = profile.buildPaletteReport(rgb);
+      let secondReport = null;
+      let secondLabel = null;
+      let palOff = null;
 
-      // Paced write sequence
+      if (jobEffect.perKey) {
+        // OEM Self-Define transaction captured from the official app:
+        // 0x84 GET -> 0x04 config selecting effect 21 -> 0x06 RGB planes.
+        cfgReport = profile.buildConfigWrite(currentRaw, {
+          effect: jobEffect,
+          brightness: snapshot.brightness,
+          speed: snapshot.speed,
+          colorful: false,
+          rgb: snapshot.rgb,
+        });
+        secondReport = profile.buildSelfDefineReport(snapshot.perKeyColors || {});
+        secondLabel = `Self-Define RGB planes (${Object.keys(snapshot.perKeyColors || {}).length} painted keys)`;
+      } else {
+        if (colorOnly) {
+          cfgReport = new Uint8Array(profile.reportSize);
+          cfgReport.set(currentRaw.slice(0, Math.min(currentRaw.length, profile.reportSize)));
+          cfgReport[0] = profile.reportId;
+          cfgReport[1] = profile.commands.writeConfig;
+
+          if (jobEffect.id !== 0 && jobEffect.color && !jobEffect.colorfulOnly) {
+            const o = profile.effectPairOffset(jobEffect.id);
+            const spd = (cfgReport[o + 1] >> 4) & 0x0f;
+            cfgReport[o + 1] = (spd << 4) | 0x00;
+          }
+        } else {
+          cfgReport = profile.buildConfigWrite(currentRaw, {
+            effect: jobEffect,
+            brightness: snapshot.brightness,
+            speed: snapshot.speed,
+            colorful: snapshot.colorful,
+            rgb: snapshot.rgb,
+          });
+        }
+
+        // OFF is a real firmware effect and needs only the config selector.
+        // Built-in lit effects use their effect-specific 0x0A palette blocks.
+        if (jobEffect.id !== 0) {
+          secondReport = profile.buildPaletteReport(snapshot.rgb, jobEffect.id, snapshot.effectColors);
+          secondLabel = 'Effect palette';
+          palOff = profile.paletteColorOffset?.(jobEffect.id);
+        } else {
+          secondLabel = 'OFF config only';
+        }
+      }
+
       await sleep(70);
       await sendReport(cfgReport);
-      await sleep(70);
-      await sendReport(palette);
+      if (secondReport) {
+        await sleep(70);
+        await sendReport(secondReport);
+      }
       await sleep(320);
 
       const verifyRaw = await readConfig();
-      const verified  = profile.decodeState(verifyRaw);
+      const verified = profile.decodeState(verifyRaw);
       lastStateRef.current = verified;
       setLastRawData(verifyRaw.slice(0, 32));
-      const desc = describeState(verified);
-      setReadback(desc);
-      addLog('verify', `Hardware confirmed: ${desc}`);
+      setReadback(describeState(verified));
+
+      addLog('verify', `Hardware confirmed: ${describeState(verified)}`,
+        jobEffect.perKey
+          ? { protocol: 'Feature 0x06 / command 0x06', paintedKeys: Object.keys(snapshot.perKeyColors || {}).length }
+          : palOff !== null && palOff !== undefined
+            ? { protocol: 'Feature 0x06 / command 0x0A', paletteSlot: `${palOff}..${palOff + 2}`, rgb: rgbToHex(snapshot.rgb) }
+            : { protocol: secondLabel }
+      );
+      setTxStatus('success');
+      setTimeout(() => {
+        setTxStatus(prev => prev === 'success' ? 'idle' : prev);
+      }, 1500);
     } catch (err) {
       addLog('error', `Write failed: ${err.message}`);
+      setTxStatus('idle');
     } finally {
       ioBusyRef.current = false;
     }
   };
 
+  const drainWriteQueue = async () => {
+    if (writeLoopRef.current) return;
+    writeLoopRef.current = true;
+    try {
+      while (pendingWriteRef.current && hidRef.current && !vizLoopRef.current) {
+        const job = pendingWriteRef.current;
+        pendingWriteRef.current = null;
+
+        // If an auto-sync read is already in progress, wait rather than losing
+        // the latest slider/color change.
+        while (ioBusyRef.current && hidRef.current && !vizLoopRef.current) {
+          await sleep(20);
+        }
+        if (!hidRef.current || vizLoopRef.current) break;
+        await performWrite(job);
+      }
+    } finally {
+      writeLoopRef.current = false;
+      // Close the tiny race where a fresh UI change can arrive after the loop
+      // observes an empty queue but before writeLoopRef is cleared.
+      if (pendingWriteRef.current && hidRef.current && !vizLoopRef.current) {
+        queueMicrotask(() => drainWriteQueue());
+      }
+    }
+  };
+
+  const writeConfig = async (src = 'manual', colorOnly = false) => {
+    if (!connected || !hidRef.current || vizLoopRef.current) return;
+
+    const snapshotEffect = profile.effects.find(e => e.id === effectId) || profile.effects[1];
+    const effectiveColorful = snapshotEffect.colorfulOnly
+      ? true
+      : snapshotEffect.colorful
+        ? colorful
+        : false;
+
+    const snapshot = {
+      effectId,
+      brightness,
+      speed,
+      colorful: effectiveColorful,
+      rgb: [...rgb],
+      // Only remember custom RGB for effects that actually expose a custom
+      // color. Colorless effects must not silently overwrite hidden slots.
+      effectColors: snapshotEffect.color && !snapshotEffect.perKey
+        ? { ...effectColors, [effectId]: [...rgb] }
+        : { ...effectColors },
+      perKeyColors: { ...perKeyColors },
+    };
+
+    // Latest-wins queue: changes made while USB is busy are not silently lost.
+    pendingWriteRef.current = { src, colorOnly, snapshot };
+    await drainWriteQueue();
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
   // Audio & Direct RGB
   // ─────────────────────────────────────────────────────────────────────────
-  const setupAudioPipeline = (stream, label) => {
-    const ctx      = new (window.AudioContext || window.webkitAudioContext)();
+  const setupAudioPipeline = async (stream, label) => {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = Math.max(0.1, Math.min(0.95, 1 - audioSmooth / 30));
-    ctx.createMediaStreamSource(stream).connect(analyser);
+    analyser.smoothingTimeConstant = smoothingFromUi(audioSmooth);
+
+    const source = ctx.createMediaStreamSource(stream);
+    source.connect(analyser);
+
+    // AudioWorklet runs on the Web Audio rendering thread. Its 20 FPS spectrum
+    // messages can be wired directly to the HID worker, so changing Chrome
+    // tabs does not depend on requestAnimationFrame/setTimeout on this page.
+    try {
+      await ctx.audioWorklet.addModule('/audio-analysis-worklet.js');
+      const worklet = new AudioWorkletNode(ctx, 'f87-audio-analysis', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      const silent = ctx.createGain();
+      silent.gain.value = 0;
+      source.connect(worklet);
+      worklet.connect(silent).connect(ctx.destination);
+      audioWorkletNodeRef.current = worklet;
+      addLog('audio', 'Background audio engine ready: AudioWorklet @ ~20 FPS.');
+    } catch (err) {
+      audioWorkletNodeRef.current = null;
+      addLog('system', `AudioWorklet unavailable; using foreground analyser fallback: ${err.message}`);
+    }
+
     audioCtxRef.current = ctx;
     audioStrRef.current = stream;
     setAudioAnalyser(analyser);
+    if (ctx.state === 'suspended') await ctx.resume().catch(() => { });
     addLog('audio', `${label} audio source initialized`);
   };
 
@@ -413,7 +790,7 @@ export default function App() {
     try {
       stopAudioCapture(false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      setupAudioPipeline(stream, 'Microphone');
+      await setupAudioPipeline(stream, 'Microphone');
       setAudioSrc('mic');
     } catch (err) { addLog('error', `Microphone error: ${err.message}`); }
   };
@@ -421,40 +798,263 @@ export default function App() {
   const handleSystemAudio = async () => {
     try {
       stopAudioCapture(false);
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { systemAudio: 'include' } });
+
+      // systemAudio is a display-capture hint, not an AudioTrackConstraint.
+      // Chrome/Edge still decide which surfaces can expose audio.
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+        systemAudio: 'include',
+        surfaceSwitching: 'include',
+        selfBrowserSurface: 'exclude',
+      });
+
       const aTracks = stream.getAudioTracks();
       if (!aTracks.length) {
         stream.getTracks().forEach(t => t.stop());
-        throw new Error('Selected share source did not provide an audio track.');
+        throw new Error('That shared tab/window/screen did not expose an audio track. Try sharing a browser tab with “Share tab audio” enabled.');
       }
-      stream.getVideoTracks().forEach(t => t.stop());
-      setupAudioPipeline(new MediaStream(aTracks), 'System/Tab');
+
+      // Keep the original display stream alive. Some Chromium/OS combinations
+      // end the associated audio capture when the video track is stopped. The
+      // Web Audio node ignores video tracks, so retaining them costs no canvas
+      // rendering and makes system/tab audio substantially more reliable.
+      await setupAudioPipeline(stream, 'System/Tab');
       setAudioSrc('system');
-    } catch (err) { addLog('error', `System audio error: ${err.message}`); }
+
+      const ended = () => stopAudioCapture(true);
+      stream.getTracks().forEach(track =>
+        track.addEventListener('ended', ended, { once: true })
+      );
+    } catch (err) {
+      if (err.name !== 'NotAllowedError') addLog('error', `System audio error: ${err.message}`);
+    }
   };
 
   const stopAudioCapture = (logIt = true) => {
     stopVisualizerLoop();
     if (audioStrRef.current) { audioStrRef.current.getTracks().forEach(t => t.stop()); audioStrRef.current = null; }
-    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null; }
+    audioWorkletNodeRef.current = null;
+    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => { }); audioCtxRef.current = null; }
     setAudioAnalyser(null);
     setAudioSrc('none');
     if (logIt) addLog('audio', 'Audio capture stopped');
   };
 
-  const startVisualizerLoop = async () => {
-    if (!connected)     { addLog('error', 'Connect keyboard before starting visualizer.'); return; }
-    if (!audioAnalyserRef.current) { addLog('error', 'Select an audio source (Microphone or Tab) first.'); return; }
-    if (vizLoopRef.current) return;
+  const sendSmallFeatureReport = async (reportId, data) => {
+    const body = new Uint8Array(profile.reportSize - 1);
+    body.set(data.slice(0, body.length));
+    await hidRef.current.sendFeatureReport(reportId, body);
+  };
 
+  const enableDirectMode = async () => {
+    let sent = 0;
+    for (const step of profile.buildDirectEnableSequence?.() || []) {
+      try {
+        await sendSmallFeatureReport(step.reportId, step.data);
+        sent++;
+      } catch {
+        // Some firmware exposes only report 0x06 and needs no enable preamble.
+      }
+      await sleep(6);
+    }
+    return sent;
+  };
+
+  const disableDirectMode = async () => {
+    const step = profile.buildDirectDisableReport?.();
+    if (!step || !hidRef.current) return;
+    try { await sendSmallFeatureReport(step.reportId, step.data); } catch { }
+  };
+
+  const send20ByteOutput = async (frame) => {
+    // WebHID strips the report ID from the body.
+    await hidRef.current.sendReport(frame[0], frame.slice(1));
+  };
+
+  const chooseStreamTransport = () => {
+    const d = hidRef.current;
+    const selected = audioTransport === 'direct520' ? 'direct520' : 'audio88';
+    const other = selected === 'audio88' ? 'direct520' : 'audio88';
+    const support = {
+      direct520: hasFeatureReport(d, profile.reportId),
+      audio88: hasOutputReport(d, 0x13),
+    };
+    if (support[selected]) return selected;
+    if (audioFallback && support[other]) return other;
+    throw new Error(
+      `${selected === 'audio88' ? 'OEM Audio 0x13/0x88' : 'Direct RGB 0x06/0x08'} is not exposed by this HID collection` +
+      (audioFallback ? ' and the fallback transport is unavailable.' : '.')
+    );
+  };
+
+  const ensureMainHidOpen = async () => {
+    if (hidRef.current?.opened) return hidRef.current;
+    const list = await navigator.hid.getDevices();
+    const d = list.find(x => x.vendorId === profile.vid && x.productId === profile.pid);
+    if (!d) throw new Error('Previously-authorized keyboard is not available.');
+    if (!d.opened) await d.open();
+    hidRef.current = d;
+    return d;
+  };
+
+  const startWorkerVisualizer = async () => {
+    if (!audioWorkletNodeRef.current || typeof Worker === 'undefined') {
+      throw new Error('AudioWorklet background engine is unavailable.');
+    }
+
+    // WorkerNavigator.hid can access already-authorized WebHID devices without
+    // another chooser. Close the window-owned handle before worker takeover.
+    if (hidRef.current?.opened) await hidRef.current.close();
+    hidRef.current = null;
+
+    const worker = new Worker(new URL('./workers/hid-stream-worker.js', import.meta.url), { type: 'module' });
+    hidWorkerRef.current = worker;
+    const channel = new MessageChannel();
+    workerAudioChannelRef.current = channel;
+
+    worker.postMessage({ type: 'attach-audio-port', port: channel.port1 }, [channel.port1]);
+    audioWorkletNodeRef.current.port.postMessage(
+      { type: 'attach-stream-port', port: channel.port2 },
+      [channel.port2]
+    );
+    worker.postMessage({
+      type: 'settings',
+      settings: {
+        mode: audioModeRef.current,
+        gain: audioGainRef.current,
+        colorful: audioColorfulRef.current,
+        rgb: rgbRef.current,
+      }
+    });
+
+    const result = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Background HID worker did not become ready in time.')), 2500);
+      worker.onmessage = event => {
+        const msg = event.data || {};
+        if (msg.type === 'ready') {
+          clearTimeout(timer);
+          resolve(msg);
+        } else if (msg.type === 'error') {
+          clearTimeout(timer);
+          reject(new Error(msg.message || 'Background HID worker failed.'));
+        } else if (msg.type === 'stopped') {
+          setBackgroundEngine('idle');
+        }
+      };
+      worker.postMessage({
+        type: 'start',
+        preference: audioTransport === 'direct520' ? 'direct520' : 'audio88',
+        fallback: audioFallback,
+      });
+    });
+
+    // After startup, keep a persistent handler so a runtime HID failure does
+    // not disappear into a Promise that has already resolved.
+    worker.onmessage = event => {
+      const msg = event.data || {};
+      if (msg.type === 'error') {
+        addLog('error', `Background HID worker stopped: ${msg.message || 'unknown error'}`);
+        workerActiveRef.current = false;
+        vizLoopRef.current = false;
+        setVizRunning(false);
+        setBackgroundEngine('worker error');
+        try { worker.terminate(); } catch { }
+        hidWorkerRef.current = null;
+        ensureMainHidOpen().catch(err => addLog('error', `Could not reclaim keyboard after worker error: ${err.message}`));
+      } else if (msg.type === 'stopped') {
+        setBackgroundEngine('idle');
+      }
+    };
+    worker.onerror = event => {
+      addLog('error', `Background worker exception: ${event.message || 'unknown worker error'}`);
+      workerActiveRef.current = false;
+      vizLoopRef.current = false;
+      setVizRunning(false);
+      setBackgroundEngine('worker error');
+      try { worker.terminate(); } catch { }
+      hidWorkerRef.current = null;
+      ensureMainHidOpen().catch(err => addLog('error', `Could not reclaim keyboard after worker exception: ${err.message}`));
+    };
+
+    workerActiveRef.current = true;
+    streamTransportRef.current = result.transport;
     vizLoopRef.current = true;
     setVizRunning(true);
-    addLog('audio', 'Started 520-byte direct RGB stream to hardware (~20 FPS)');
+    setBackgroundEngine(`AudioWorklet + HID Worker · ${result.transport === 'audio88' ? 'OEM Audio 0x13/0x88' : 'Direct RGB 0x06/0x08'}`);
+    addLog('audio', `Background realtime engine started: ${result.transport === 'audio88' ? 'OEM Audio Stream 0x13/0x88' : 'Direct RGB Framebuffer 0x06/0x08'}.`);
+  };
 
-    let phase = 0, frames = 0;
+
+  const startVisualizerLoop = async () => {
+    if (!connected) {
+      addLog('error', 'Connect keyboard before starting visualizer.');
+      return;
+    }
+    if (!audioAnalyserRef.current) {
+      addLog('error', 'Select an audio source (Microphone or Tab/System) first.');
+      return;
+    }
+    if (vizLoopRef.current) return;
+
+    // Preferred path: AudioWorklet -> Dedicated HID Worker. This removes the
+    // main page's timer/render loop from the hardware stream and is far more
+    // resistant to Chrome background-tab throttling.
+    if (audioWorkletNodeRef.current) {
+      try {
+        pendingWriteRef.current = null;
+        clearTimeout(liveTimerRef.current);
+        await startWorkerVisualizer();
+        return;
+      } catch (err) {
+        addLog('system', `Background worker stream unavailable; falling back to page loop: ${err.message}`);
+        setBackgroundEngine('foreground fallback');
+        try { await ensureMainHidOpen(); } catch (openErr) {
+          addLog('error', `Could not reopen keyboard after worker fallback: ${openErr.message}`);
+          return;
+        }
+        if (hidWorkerRef.current) {
+          try { hidWorkerRef.current.terminate(); } catch { }
+          hidWorkerRef.current = null;
+        }
+        workerActiveRef.current = false;
+      }
+    }
+
+    try {
+      const transport = chooseStreamTransport();
+      streamTransportRef.current = transport;
+
+      if (transport === 'direct520') {
+        const enabled = await enableDirectMode();
+        addLog('audio', `Realtime transport: 520-byte Feature 0x06 / cmd 0x08${enabled ? ` (${enabled} enable reports accepted)` : ''}`);
+      } else {
+        // Prime OEM audio stream with a few idle frames.
+        const idles = buildAudioStreamFrames(new Map());
+        for (let i = 0; i < 3; i++) {
+          await send20ByteOutput(idles[0]);
+          await sleep(12);
+        }
+        addLog('audio', 'Realtime transport: 20-byte Output 0x13 / cmd 0x88');
+      }
+    } catch (err) {
+      addLog('error', `Cannot start realtime visualizer: ${err.message}`);
+      return;
+    }
+
+    pendingWriteRef.current = null;
+    clearTimeout(liveTimerRef.current);
+    vizLoopRef.current = true;
+    setVizRunning(true);
+    setBackgroundEngine('Foreground page loop');
+
+    let phase = 0;
+    let frames = 0;
+    let lastFrameAt = performance.now();
 
     const loop = async () => {
       if (!vizLoopRef.current) return;
+
       const curAnalyser = audioAnalyserRef.current;
       if (!curAnalyser) {
         vizLoopRef.current = false;
@@ -463,87 +1063,106 @@ export default function App() {
       }
 
       try {
+        // Keep target cadence stable instead of piling up asynchronous writes.
+        const now = performance.now();
+        const elapsed = now - lastFrameAt;
+        if (elapsed < 45) {
+          setTimeout(loop, 45 - elapsed);
+          return;
+        }
+        lastFrameAt = performance.now();
+
         const freq = new Uint8Array(curAnalyser.frequencyBinCount);
         curAnalyser.getByteFrequencyData(freq);
 
-        const gainVal     = audioGainRef.current;
-        const curMode     = audioModeRef.current;
-        const curColorful = colorfulRef.current;
-        const curRgb      = rgbRef.current;
-
-        const bass  = freq.slice(0, 10).reduce((a, b) => a + b, 0) / 10 / 255 * gainVal;
-        const mid   = freq.slice(10, 35).reduce((a, b) => a + b, 0) / 25 / 255 * gainVal;
-        const high  = freq.slice(35, 64).reduce((a, b) => a + b, 0) / 29 / 255 * gainVal;
-        const level = Math.min(1, bass * 0.5 + mid * 0.35 + high * 0.15);
-        phase += 0.08 + level * 0.12;
-
-        const colors = new Map();
-        profile.keys.forEach(([idx, leftU, topU]) => {
-          const x = Math.round(leftU);
-          const y = Math.round(topU);
-
-          let v = 0, h = (x * 18 + phase * 80) % 360;
-          switch (curMode) {
-            case "Audio dance – soft":
-              v = Math.max(0, level - Math.abs(x - 8) / 14) * 1.3; break;
-            case "Dazzling – rock":
-              v = bass > 0.45 ? Math.min(1, bass * 1.4) : mid * 0.35;
-              h = (phase * 220 + x * 25 + y * 40) % 360; break;
-            case "Clouds rise and snow fly":
-              v = Math.max(0, high * 1.4 - (5 - y) / 8) * (0.55 + 0.45 * Math.sin(phase * 3 + x)); break;
-            case "Light Field Change – voice":
-              v = Math.min(1, mid * 1.5) * (0.45 + 0.55 * Math.sin(x * 0.45 + phase * 2) ** 2); break;
-            case "The gurgling stream":
-              v = Math.max(0, level * 0.9 + 0.35 * Math.sin(x * 0.55 - y * 0.7 + phase * 3)); h = 185 + x * 4; break;
-            case "Blooming – passion": {
-              const d = Math.hypot(x - 8, y - 2.5);
-              v = Math.max(0, level * 1.6 - Math.abs(d - (phase * 3) % 9) * 0.25); h = 330 + d * 7; break;
-            }
-            case "Pearl falling jade plate":
-              v = (high > 0.35 && ((x * 7 + y * 13 + Math.floor(phase * 8)) % 17) < 2) ? Math.min(1, high * 1.5) : level * 0.08;
-              h = 160 + high * 100; break;
-            case "Clouds follow the moon":
-              v = 0.12 + level * 0.45 + 0.16 * Math.sin(x * 0.25 + phase); h = 205 + 20 * Math.sin(phase * 0.4); break;
-            case "Mountains and Flowing Waters": {
-              const bin = Math.min(freq.length - 1, Math.floor((x / 17) * freq.length));
-              const ht  = (freq[bin] / 255) * 6 * gainVal;
-              v = (5 - y) < ht ? Math.min(1, 0.25 + freq[bin] / 255 * gainVal) : 0; h = 120 + x * 7; break;
-            }
-            case "Raining like silk – regular":
-              v = Math.max(0, level * 0.35 + 0.7 * Math.sin(y * 1.2 - phase * 5 + (x % 5) * 1.5));
-              v *= high * 0.7 + mid * 0.5; h = 190 + x * 3; break;
-            default: v = level;
-          }
-          v = Math.max(0, Math.min(1, v));
-          colors.set(idx, curColorful ? hsv(h, 90, v * 100) : curRgb.map(c => (c * v) | 0));
+        phase += 0.055;
+        const colors = renderAudioFrame(profile, freq, {
+          mode: audioModeRef.current,
+          gain: audioGainRef.current,
+          colorful: audioColorfulRef.current,
+          rgb: rgbRef.current,
+          phase,
         });
 
-        await sendReport(profile.buildDirectFrame(colors));
+        if (streamTransportRef.current === 'audio88') {
+          const fragments = buildAudioStreamFrames(colors, 64);
+          for (let i = 0; i < fragments.length; i++) {
+            await send20ByteOutput(fragments[i]);
+            if (i + 1 < fragments.length) await sleep(8);
+          }
+        } else {
+          await sendReport(profile.buildDirectFrame(colors));
+        }
+
         frames++;
-        if (frames === 1) addLog('audio', 'First direct RGB frame accepted by WebHID hardware');
+        if (frames === 1) addLog('audio', 'First realtime keyboard frame sent successfully.');
       } catch (err) {
-        addLog('error', `Direct RGB Error: ${err.message}`);
+        addLog('error', `Realtime RGB error: ${err.message}`);
         vizLoopRef.current = false;
         setVizRunning(false);
         return;
       }
-      setTimeout(loop, 50);
+
+      setTimeout(loop, 0);
     };
+
     loop();
   };
 
-  const stopVisualizerLoop = () => {
-    if (!vizLoopRef.current) return;
+  const stopVisualizerLoop = async () => {
+    if (!vizLoopRef.current && !workerActiveRef.current) return;
     vizLoopRef.current = false;
     setVizRunning(false);
-    addLog('audio', 'Direct RGB stream stopped');
-    if (hidRef.current) {
-      const blank = new Uint8Array(profile.reportSize);
-      blank[0] = profile.reportId;
-      blank[1] = profile.commands.directRgb;
-      sendReport(blank).catch(() => {});
+
+    if (workerActiveRef.current && hidWorkerRef.current) {
+      try { hidWorkerRef.current.postMessage({ type: 'stop' }); } catch { }
+      await sleep(180);
+      try { hidWorkerRef.current.terminate(); } catch { }
+      hidWorkerRef.current = null;
+      workerActiveRef.current = false;
+      workerAudioChannelRef.current = null;
+
+      try { await ensureMainHidOpen(); }
+      catch (err) { addLog('error', `Keyboard reopen after background stream failed: ${err.message}`); }
+
+      streamTransportRef.current = null;
+      setBackgroundEngine('idle');
+      addLog('audio', 'Background keyboard visualizer stopped.');
+      if (hidRef.current && connected) {
+        setTimeout(() => writeConfig('restore-after-stream').catch(() => { }), 140);
+      }
+      return;
+    }
+
+    try {
+      if (hidRef.current && streamTransportRef.current === 'audio88') {
+        const idle = buildAudioStreamFrames(new Map())[0];
+        await send20ByteOutput(idle);
+      } else if (hidRef.current) {
+        const blank = profile.buildDirectFrame(new Map());
+        await sendReport(blank);
+        await disableDirectMode();
+      }
+    } catch { }
+
+    streamTransportRef.current = null;
+    setBackgroundEngine('idle');
+    addLog('audio', 'Realtime keyboard visualizer stopped');
+
+    if (hidRef.current && connected) {
+      setTimeout(() => writeConfig('restore-after-stream').catch(() => { }), 120);
     }
   };
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden && vizLoopRef.current && !workerActiveRef.current) {
+        addLog('system', 'Controller tab is hidden while the foreground audio loop is active. Chromium may throttle it; use the AudioWorklet + HID Worker engine or install/open the PWA in its own window.');
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Global Color Change Handler (Synced to whole site & keyboard)
@@ -551,7 +1170,10 @@ export default function App() {
   const handleGlobalColorChange = (newRgb, newHex) => {
     setRgb(newRgb);
     setHexColor(newHex);
-    if (activeEffect.color && !activeEffect.colorfulOnly && colorful) {
+    if (activeEffect.color && !activeEffect.perKey) {
+      setEffectColors(prev => ({ ...prev, [effectId]: [...newRgb] }));
+    }
+    if (activeEffect.color && !activeEffect.perKey && !activeEffect.colorfulOnly && colorful) {
       setColorful(false);
     }
   };
@@ -560,7 +1182,95 @@ export default function App() {
     setColorful(newVal);
   };
 
-  const accentCSS  = { color: 'var(--accent)' };
+  const handleEffectChange = (nextId) => {
+    const nextEffect = profile.effects.find(e => e.id === nextId);
+    setEffectId(nextId);
+
+    // Keep the UI state valid for the selected firmware effect. This avoids
+    // stale Colorful=true from a previous effect making colorless/fixed effects
+    // preview differently from the bytes we actually send.
+    if (nextEffect?.colorfulOnly) setColorful(true);
+    else if (!nextEffect?.colorful) setColorful(false);
+
+    if (nextEffect?.perKey) {
+      if (!Object.keys(perKeyColors || {}).length) {
+        setPerKeyColors(profile.selfDefineGamingDefault?.() || {});
+      }
+      setColorful(false);
+      return;
+    }
+
+    const remembered = effectColors[nextId];
+    if (Array.isArray(remembered) && remembered.length >= 3) {
+      const nextRgb = remembered.slice(0, 3);
+      setRgb(nextRgb);
+      setHexColor(rgbToHex(nextRgb));
+    }
+  };
+
+  const handlePerKeyPaint = (idx) => {
+    if (effectId !== 21) return;
+    setPerKeyColors(prev => {
+      if (perKeyErase) {
+        if (!(idx in prev)) return prev;
+        const next = { ...prev };
+        delete next[idx];
+        return next;
+      } else {
+        if (prev[idx] && prev[idx][0] === rgb[0] && prev[idx][1] === rgb[1] && prev[idx][2] === rgb[2]) {
+          return prev;
+        }
+        const next = { ...prev };
+        next[idx] = [...rgb];
+        return next;
+      }
+    });
+  };
+
+  const setPerKeyPreset = (kind) => {
+    if (kind === 'default') {
+      setPerKeyColors(profile.selfDefineGamingDefault?.() || {});
+      setPerKeyErase(false);
+      return;
+    }
+    if (kind === 'all') {
+      const next = {};
+      profile.keys.forEach(([idx]) => { next[idx] = [...rgb]; });
+      setPerKeyColors(next);
+      setPerKeyErase(false);
+      return;
+    }
+    if (kind === 'clear') {
+      setPerKeyColors(prev => {
+        if (Object.keys(prev).length === 0) return prev;
+        return {};
+      });
+    }
+  };
+
+  const saveTemplate = () => {
+    if (!templateName.trim()) return;
+    const name = templateName.trim();
+    const next = [...templates.filter(t => t.name !== name), { name, colors: { ...perKeyColors } }];
+    setTemplates(next);
+    localStorage.setItem('f87_custom_templates', JSON.stringify(next));
+    setTemplateName('');
+    addLog('system', `Saved custom layout template "${name}"`);
+  };
+
+  const loadTemplate = (colors) => {
+    setPerKeyColors(colors || {});
+    addLog('system', 'Loaded layout template from storage.');
+  };
+
+  const deleteTemplate = (name) => {
+    const next = templates.filter(t => t.name !== name);
+    setTemplates(next);
+    localStorage.setItem('f87_custom_templates', JSON.stringify(next));
+    addLog('system', `Deleted template "${name}"`);
+  };
+
+  const accentCSS = { color: 'var(--accent)' };
   const accent2CSS = { color: 'var(--accent2)' };
 
   const ThemeBar = () => (
@@ -601,7 +1311,7 @@ export default function App() {
     <div
       style={{
         minHeight: '100svh',
-        background: 'var(--bg)',
+        background: '#1a2640',
         color: 'var(--text)',
         padding: 'clamp(1rem, 3vw, 2.5rem)',
         display: 'flex',
@@ -619,17 +1329,17 @@ export default function App() {
           position: 'absolute', top: '-5%', left: '-10%',
           width: '45vw', height: '45vw', borderRadius: '50%',
           background: 'rgba(var(--accent-rgb),0.1)', filter: 'blur(90px)'
-        }}/>
+        }} />
         <div className="blob-2" style={{
           position: 'absolute', bottom: '-10%', right: '-5%',
           width: '50vw', height: '50vw', borderRadius: '50%',
           background: 'rgba(168,85,247,0.06)', filter: 'blur(100px)'
-        }}/>
+        }} />
         <div className="blob-3" style={{
           position: 'absolute', top: '40%', right: '30%',
           width: '25vw', height: '25vw', borderRadius: '50%',
           background: 'rgba(236,72,153,0.04)', filter: 'blur(70px)'
-        }}/>
+        }} />
       </div>
 
       <div style={{ width: '100%', maxWidth: '72rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', zIndex: 1 }}>
@@ -651,6 +1361,16 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                {!isInstalled && installPrompt && (
+                  <button className="btn btn-secondary" onClick={installApp} title="Install as a standalone desktop web app">
+                    <Download size={15} /> Install App
+                  </button>
+                )}
+                {isInstalled && (
+                  <span style={{ fontSize: '0.68rem', fontFamily: 'monospace', color: '#4ade80', fontWeight: 800 }}>
+                    INSTALLED PWA
+                  </span>
+                )}
                 {connected ? (<>
                   <button className="btn btn-secondary" onClick={syncDevice} disabled={vizLoopRef.current} title="Read current config from keyboard">
                     <RefreshCw size={15} /> Read Now
@@ -694,32 +1414,44 @@ export default function App() {
             {readback !== '—' && `Config: ${readback}`}
           </span>
 
-          <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap', position: 'relative' }}>
             <ToggleSwitch
-              checked={autoSync}
-              onChange={setAutoSync}
-              label="Auto sync"
-              badge="3.0s"
+              checked={realtimeSync}
+              onChange={setRealtimeSync}
+              label="Realtime Sync"
               color="var(--accent)"
             />
-            <ToggleSwitch
-              checked={liveApply}
-              onChange={setLiveApply}
-              label="Live apply"
-              color="var(--accent)"
-            />
+            <button
+              onClick={() => setShowSyncInfo(v => !v)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 2, display: 'flex', alignItems: 'center', marginLeft: -12 }}
+              title="What is Realtime Sync?"
+            >
+              <Info size={14} />
+            </button>
+            {showSyncInfo && (
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 100, width: 260,
+                background: 'var(--surface2)', border: '1px solid var(--border-alt)',
+                borderRadius: styleMode === 'neo' ? 0 : 10, padding: '0.85rem', fontSize: '0.72rem',
+                color: 'var(--text2)', lineHeight: 1.5,
+                boxShadow: styleMode === 'neo' ? '4px 4px 0 var(--border)' : '0 8px 24px rgba(0,0,0,0.45)'
+              }}>
+                <strong style={{ color: 'var(--text)', display: 'block', marginBottom: 4 }}>Realtime Sync</strong>
+                Retrieves external changes (speed, brightness, knobs) from your keyboard every 3s, and instantly streams color changes back. Manual Apply buttons are hidden when active.
+              </div>
+            )}
           </div>
         </div>
 
         {/* 3. Main Controls Section ON TOP of Visualizer */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          
+
           {/* Navigation Tabs */}
           <div style={{ display: 'flex', gap: '0.25rem', borderBottom: `2px solid var(--border-alt)` }}>
             {[
-              { id: 'lighting',    icon: <Sliders size={14}/>,  label: 'Lighting' },
-              { id: 'audio',       icon: <Volume2 size={14}/>,  label: 'Audio Visualizer' },
-              { id: 'diagnostics', icon: <Terminal size={14}/>, label: 'Diagnostics' },
+              { id: 'lighting', icon: <Sliders size={14} />, label: 'Lighting' },
+              { id: 'audio', icon: <Volume2 size={14} />, label: 'Audio Visualizer' },
+              { id: 'diagnostics', icon: <Terminal size={14} />, label: 'Diagnostics' },
             ].map(t => (
               <button
                 key={t.id}
@@ -749,7 +1481,7 @@ export default function App() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                  
+
                   {/* Fixed Dropdown Menu (Requirement #1) */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <label style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text2)', fontWeight: 700 }}>
@@ -758,10 +1490,10 @@ export default function App() {
                     <select
                       className="app-select"
                       value={effectId}
-                      onChange={e => setEffectId(Number(e.target.value))}
+                      onChange={e => handleEffectChange(Number(e.target.value))}
                     >
                       {profile.effects.map(e => (
-                        <option key={e.id} value={e.id}>{e.name}</option>
+                        <option key={e.id} value={e.id}>{e.name}{e.experimental ? ' — Experimental' : ''}</option>
                       ))}
                     </select>
                   </div>
@@ -776,8 +1508,9 @@ export default function App() {
                     </div>
                     <input
                       type="range" min={0} max={4} step={1} value={brightness}
+                      disabled={effectId === 0 || activeEffect.perKey}
                       onChange={e => setBrightness(Number(e.target.value))}
-                      style={{ width: '100%', accentColor: 'var(--accent)' }}
+                      style={{ width: '100%', accentColor: 'var(--accent)', opacity: effectId === 0 || activeEffect.perKey ? 0.35 : 1 }}
                     />
                   </div>
 
@@ -791,52 +1524,54 @@ export default function App() {
                     </div>
                     <input
                       type="range" min={0} max={4} step={1} value={speed}
-                      disabled={!activeEffect.speed}
+                      disabled={effectId === 0 || activeEffect.perKey || !activeEffect.speed}
                       onChange={e => setSpeed(Number(e.target.value))}
-                      style={{ width: '100%', accentColor: 'var(--accent)', opacity: activeEffect.speed ? 1 : 0.35 }}
+                      style={{ width: '100%', accentColor: 'var(--accent)', opacity: effectId !== 0 && !activeEffect.perKey && activeEffect.speed ? 1 : 0.35 }}
                     />
                   </div>
 
                   {/* Action buttons */}
-                  <div style={{ display: 'flex', gap: '0.75rem' }}>
-                    <button
-                      className="btn btn-primary"
-                      style={{ flex: 1 }}
-                      onClick={() => writeConfig('manual')}
-                      disabled={!connected || vizRunning}
-                    >
-                      Apply Now
-                    </button>
-                    <div style={{ position: 'relative', flex: 1 }}>
+                  {!realtimeSync && (
+                    <div style={{ display: 'flex', gap: '0.75rem' }}>
                       <button
-                        className="btn btn-secondary"
-                        style={{ width: '100%' }}
-                        disabled={!connected || !activeEffect.color || vizRunning}
-                        onClick={() => writeConfig('manual', true)}
+                        className="btn btn-primary"
+                        style={{ flex: 1 }}
+                        onClick={() => writeConfig('manual')}
+                        disabled={!connected || vizRunning}
                       >
-                        Palette Only
+                        Apply Now
                       </button>
-                      <button
-                        onClick={() => setShowInfo(v => !v)}
-                        style={{ position: 'absolute', top: -6, right: -6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 2 }}
-                        title="What is Palette Only?"
-                      >
-                        <Info size={13} />
-                      </button>
-                      {showInfo && (
-                        <div style={{
-                          position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 50, width: 220,
-                          background: 'var(--surface2)', border: '1px solid var(--border-alt)',
-                          borderRadius: styleMode === 'neo' ? 0 : 10, padding: '0.75rem', fontSize: '0.72rem',
-                          color: 'var(--text2)', lineHeight: 1.5,
-                          boxShadow: styleMode === 'neo' ? '4px 4px 0 var(--border)' : '0 8px 24px rgba(0,0,0,0.3)'
-                        }}>
-                          <strong style={{ color: 'var(--text)', display: 'block', marginBottom: 4 }}>Palette Only</strong>
-                          Writes only the RGB color to the keyboard hardware without overriding active effect mode or speed settings.
-                        </div>
-                      )}
+                      <div style={{ position: 'relative', flex: 1 }}>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ width: '100%' }}
+                          disabled={!connected || effectId === 0 || activeEffect.perKey || !activeEffect.color || vizRunning}
+                          onClick={() => writeConfig('manual', true)}
+                        >
+                          Palette Only
+                        </button>
+                        <button
+                          onClick={() => setShowInfo(v => !v)}
+                          style={{ position: 'absolute', top: -6, right: -6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 2 }}
+                          title="What is Palette Only?"
+                        >
+                          <Info size={13} />
+                        </button>
+                        {showInfo && (
+                          <div style={{
+                            position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 50, width: 220,
+                            background: 'var(--surface2)', border: '1px solid var(--border-alt)',
+                            borderRadius: styleMode === 'neo' ? 0 : 10, padding: '0.75rem', fontSize: '0.72rem',
+                            color: 'var(--text2)', lineHeight: 1.5,
+                            boxShadow: styleMode === 'neo' ? '4px 4px 0 var(--border)' : '0 8px 24px rgba(0,0,0,0.3)'
+                          }}>
+                            <strong style={{ color: 'var(--text)', display: 'block', marginBottom: 4 }}>Palette Only</strong>
+                            Writes only the RGB color to the keyboard hardware without overriding active effect mode or speed settings.
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </article>
 
@@ -862,13 +1597,13 @@ export default function App() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid var(--border-alt)' }}>
                       <span>Color Customization:</span>
                       <strong style={{ color: activeEffect.color ? '#4ade80' : '#f87171' }}>
-                        {activeEffect.color ? (activeEffect.colorfulOnly ? 'Colorful Only' : 'Custom RGB Supported') : 'Not Applicable'}
+                        {effectId === 0 ? 'Lighting Off' : activeEffect.perKey ? 'Per-Key RGB' : activeEffect.color ? (activeEffect.colorfulOnly ? 'Colorful Only' : 'Custom RGB Supported') : 'Not Applicable'}
                       </strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: '1px solid var(--border-alt)' }}>
                       <span>Speed Adjustment:</span>
                       <strong style={{ color: activeEffect.speed ? '#4ade80' : '#94a3b8' }}>
-                        {activeEffect.speed ? 'Adjustable (0-4)' : 'Fixed Speed'}
+                        {effectId === 0 ? 'Disabled' : activeEffect.perKey ? 'Per-Key Mode' : activeEffect.speed ? 'Adjustable (0-4)' : 'Fixed Speed'}
                       </strong>
                     </div>
                   </div>
@@ -876,7 +1611,144 @@ export default function App() {
 
                 <div style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: 8, background: 'rgba(var(--accent-rgb),0.08)', border: '1px solid var(--border-alt)', fontSize: '0.75rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Sparkles size={16} style={accentCSS} />
-                  <span>Use the floating color bubble at the bottom right to pick any RGB color or toggle Colorful mode anytime!</span>
+                  <span>{activeEffect.perKey ? 'Self Define: the floating color bubble is your paint color. Click keys in the editor below, then Apply.' : effectId === 0 ? 'Lighting is OFF. Select any non-OFF effect above to re-enable lighting controls.' : 'Use the floating color bubble at the bottom right to pick any RGB color or toggle Colorful mode anytime!'}</span>
+                </div>
+              </article>
+
+              <article className="panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', opacity: activeEffect.perKey ? 1 : 0.55, transition: 'opacity 0.2s ease' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-alt)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Paintbrush size={18} style={accentCSS} />
+                      <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        Self Define RGB
+                      </h2>
+                    </div>
+                    <ToggleSwitch
+                      checked={activeEffect.perKey}
+                      onChange={(checked) => {
+                        setEffectId(checked ? 21 : 1);
+                      }}
+                      color="var(--accent)"
+                    />
+                  </div>
+
+                  <p style={{ margin: '0 0 1rem', color: 'var(--text2)', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                    Pick a brush color from the bubble, click keys below to draw your map.
+                  </p>
+
+                  {/* Compact Grid Tools */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', pointerEvents: activeEffect.perKey ? 'auto' : 'none' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                      <button
+                        className={`btn ${!perKeyErase ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setPerKeyErase(false)}
+                        style={{
+                          padding: '0.5rem',
+                          fontSize: '0.68rem',
+                          background: !perKeyErase ? 'var(--accent)' : undefined,
+                          color: !perKeyErase ? 'var(--accent-contrast)' : undefined
+                        }}
+                      >
+                        <Paintbrush size={13} /> Brush
+                      </button>
+                      <button
+                        className={`btn ${perKeyErase ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setPerKeyErase(true)}
+                        style={{
+                          padding: '0.5rem',
+                          fontSize: '0.68rem',
+                          background: perKeyErase ? 'var(--accent)' : undefined,
+                          color: perKeyErase ? 'var(--accent-contrast)' : undefined
+                        }}
+                      >
+                        <Eraser size={13} /> Eraser
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.4rem' }}>
+                      <button className="btn btn-secondary" onClick={() => setPerKeyPreset('default')} style={{ padding: '0.5rem', fontSize: '0.62rem' }} title="Default Gaming Layout">
+                        Gaming
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => setPerKeyPreset('all')} style={{ padding: '0.5rem', fontSize: '0.62rem' }}>
+                        Fill
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => setPerKeyPreset('clear')} style={{ padding: '0.5rem', fontSize: '0.62rem' }}>
+                        Clear
+                      </button>
+                    </div>
+
+                    {!realtimeSync && (
+                      <button
+                        className="btn btn-primary"
+                        disabled={!connected || vizRunning}
+                        onClick={() => writeConfig('per-key-manual')}
+                        style={{ width: '100%', padding: '0.65rem', marginTop: '0.25rem' }}
+                      >
+                        Apply Per-Key Map
+                      </button>
+                    )}
+
+                    {/* Template Builder */}
+                    <div style={{
+                      marginTop: '0.65rem',
+                      borderTop: '1px solid var(--border-alt)',
+                      paddingTop: '0.65rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.4rem',
+                      pointerEvents: activeEffect.perKey ? 'auto' : 'none'
+                    }}>
+                      <label style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text2)', fontWeight: 700 }}>
+                        Save Layout Template
+                      </label>
+                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                        <input
+                          className="app-input"
+                          type="text"
+                          placeholder="My Custom Preset..."
+                          value={templateName}
+                          onChange={e => setTemplateName(e.target.value)}
+                          style={{ fontSize: '0.72rem', padding: '0.35rem 0.55rem' }}
+                        />
+                        <button
+                          className="btn btn-secondary"
+                          onClick={saveTemplate}
+                          style={{ fontSize: '0.72rem', padding: '0.35rem 0.65rem', whiteSpace: 'nowrap' }}
+                        >
+                          Save
+                        </button>
+                      </div>
+
+                      {templates.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: 85, overflowY: 'auto', marginTop: '0.25rem' }}>
+                          {templates.map(t => (
+                            <div key={t.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.3rem 0.45rem', background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: '0.7rem' }}>
+                              <button
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--text)', fontWeight: 650, flex: 1, padding: 0 }}
+                                onClick={() => loadTemplate(t.colors)}
+                                title="Click to load layout"
+                              >
+                                {t.name}
+                              </button>
+                              <button
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)' }}
+                                onClick={() => deleteTemplate(t.name)}
+                                title="Delete template"
+                              >
+                                <X size={11} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '0.8rem', color: 'var(--text3)', fontSize: '0.65rem', fontFamily: 'monospace', borderTop: '1px solid var(--border-alt)', paddingTop: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{Object.keys(perKeyColors).length} Painted Keys</span>
+                  <span>Feature 0x06 / 0x06</span>
                 </div>
               </article>
             </div>
@@ -889,7 +1761,7 @@ export default function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-alt)' }}>
                   <Mic size={18} style={{ color: 'var(--accent3)' }} />
                   <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                    Audio Source & Style
+                    Audio Capture & Keyboard Reactive Lighting
                   </h2>
                 </div>
 
@@ -899,15 +1771,19 @@ export default function App() {
                     onClick={handleMic}
                     style={{ justifyContent: 'center' }}
                   >
-                    <Mic size={14} /> Microphone
+                    <Mic size={14} /> Use Microphone
                   </button>
                   <button
                     className={`btn ${audioSrc === 'system' ? 'btn-primary' : 'btn-secondary'}`}
                     onClick={handleSystemAudio}
                     style={{ justifyContent: 'center' }}
                   >
-                    <Monitor size={14} /> Tab / System
+                    <Monitor size={14} /> Capture Tab / System Audio
                   </button>
+                </div>
+
+                <div style={{ margin: '-0.35rem 0 1rem', color: 'var(--text3)', fontSize: '0.7rem', lineHeight: 1.5 }}>
+                  For YouTube/Spotify in Chrome, choose <strong style={{ color: 'var(--text2)' }}>Capture Tab / System Audio</strong>, select the playing tab, and enable <strong style={{ color: 'var(--text2)' }}>Share tab audio</strong>. For the smoothest background operation, install this PWA and keep the controller in its own app window.
                 </div>
 
                 {audioSrc !== 'none' && (
@@ -916,7 +1792,7 @@ export default function App() {
                     style={{ width: '100%', marginBottom: '1rem' }}
                     onClick={() => stopAudioCapture(true)}
                   >
-                    Stop Audio Source
+                    Stop Audio Capture
                   </button>
                 )}
 
@@ -927,6 +1803,49 @@ export default function App() {
                   <select className="app-select" value={audioMode} onChange={e => setAudioMode(e.target.value)}>
                     {profile.audioModes.map(m => <option key={m} value={m}>{m}</option>)}
                   </select>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: '1rem' }}>
+                  <label style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text2)', fontWeight: 700 }}>
+                    Real Transport Protocol
+                  </label>
+                  <select className="app-select" value={audioTransport} onChange={e => setAudioTransport(e.target.value)} disabled={vizRunning}>
+                    <option value="audio88">OEM Audio Stream — 0x13 / 0x88</option>
+                    <option value="direct520">Direct RGB Framebuffer — 0x06 / 0x08</option>
+                  </select>
+
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: '0.55rem', fontSize: '0.66rem', fontFamily: 'monospace' }}>
+                    <span style={{ padding: '0.2rem 0.45rem', border: '1px solid var(--border-alt)', borderRadius: 999, color: transportCaps.audio88 === true ? '#4ade80' : transportCaps.audio88 === false ? '#f87171' : 'var(--text3)' }}>
+                      0x13 output report: {transportCaps.audio88 === true ? 'EXPOSED' : transportCaps.audio88 === false ? 'NOT EXPOSED' : 'UNKNOWN'}
+                    </span>
+                    <span style={{ padding: '0.2rem 0.45rem', border: '1px solid var(--border-alt)', borderRadius: 999, color: transportCaps.direct520 === true ? '#4ade80' : transportCaps.direct520 === false ? '#f87171' : 'var(--text3)' }}>
+                      0x06 feature report: {transportCaps.direct520 === true ? 'EXPOSED' : transportCaps.direct520 === false ? 'NOT EXPOSED' : 'UNKNOWN'}
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: '0.65rem' }}>
+                    <ToggleSwitch
+                      checked={audioFallback}
+                      onChange={setAudioFallback}
+                      label="Automatic fallback"
+                      subLabel={audioFallback ? 'If the selected real protocol is unavailable, try the other one.' : 'Use only the selected protocol.'}
+                      color="var(--accent3)"
+                    />
+                  </div>
+
+                  <div style={{
+                    marginTop: '0.6rem',
+                    fontSize: '0.7rem',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid var(--border-alt)',
+                    borderRadius: styleMode === 'neo' ? 0 : 8,
+                    padding: '0.7rem 0.85rem',
+                    lineHeight: 1.55,
+                    color: 'var(--text2)'
+                  }}>
+                    <div><strong style={{ color: 'var(--text)' }}>0x13 / 0x88 OEM Audio Stream:</strong> sparse RGB groups; best first choice for music-reactive effects.</div>
+                    <div style={{ marginTop: 4 }}><strong style={{ color: 'var(--text)' }}>0x06 / 0x08 Direct RGB:</strong> full 122-LED framebuffer; best for complex per-key animation.</div>
+                  </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: '0.85rem' }}>
@@ -951,25 +1870,48 @@ export default function App() {
                     onChange={e => {
                       const v = Number(e.target.value);
                       setAudioSmooth(v);
-                      if (audioAnalyser) audioAnalyser.smoothingTimeConstant = Math.max(0.1, Math.min(0.95, 1 - v / 30));
+                      if (audioAnalyser) audioAnalyser.smoothingTimeConstant = smoothingFromUi(v);
                     }}
                     style={{ accentColor: 'var(--accent3)' }}
                   />
                 </div>
 
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <ToggleSwitch
+                    checked={audioColorful}
+                    onChange={setAudioColorful}
+                    label="Dynamic Multicolor"
+                    subLabel={audioColorful ? 'The browser generates changing colors for every audio frame.' : `Single-color audio uses ${rgbToHex(rgb)} as the base color.`}
+                    color="var(--accent3)"
+                  />
+                </div>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                   {vizRunning ? (
-                    <button className="btn btn-danger" style={{ width: '100%', padding: '0.85rem' }} onClick={stopVisualizerLoop}>
-                      <Square size={15} fill="currentColor" /> Stop Keyboard Visualizer
+                    <button
+                      className="btn btn-danger"
+                      style={{ width: '100%', padding: '0.85rem' }}
+                      onClick={stopVisualizerLoop}
+                    >
+                      <Square size={15} fill="currentColor" /> Stop Keyboard Audio
                     </button>
                   ) : (
                     <button
                       className="btn btn-primary"
-                      style={{ width: '100%', padding: '0.85rem' }}
                       disabled={!connected || audioSrc === 'none'}
                       onClick={startVisualizerLoop}
+                      style={{
+                        width: '100%',
+                        padding: '0.85rem',
+                        background: connected && audioSrc !== 'none' ? 'var(--accent3)' : 'rgba(255,255,255,0.04)',
+                        color: connected && audioSrc !== 'none' ? 'var(--accent3-contrast)' : 'var(--text3)',
+                        borderColor: connected && audioSrc !== 'none' ? 'var(--border)' : 'var(--border-alt)',
+                        boxShadow: connected && audioSrc !== 'none' ? (styleMode === 'neo' ? '4px 4px 0 var(--border)' : '0 4px 18px rgba(var(--accent3-rgb), 0.4)') : 'none',
+                        cursor: connected && audioSrc !== 'none' ? 'pointer' : 'not-allowed',
+                        opacity: connected && audioSrc !== 'none' ? 1 : 0.4
+                      }}
                     >
-                      <Play size={15} fill="currentColor" /> Start Keyboard Visualizer
+                      <Play size={15} fill="currentColor" /> Start Keyboard Audio
                     </button>
                   )}
                 </div>
@@ -984,8 +1926,25 @@ export default function App() {
                 </div>
 
                 <p style={{ color: 'var(--text2)', fontSize: '0.82rem', lineHeight: 1.6 }}>
-                  Direct 520-byte RGB streaming frame format. Changes to styles, gain, and color mode stream live to the keyboard at ~20 FPS.
+                  The audio preview and physical keyboard share one renderer. When supported, audio analysis runs in an AudioWorklet and HID streaming moves into a Dedicated Worker, so changing Chrome tabs does not depend on this page's requestAnimationFrame or timer loop.
                 </p>
+
+                <div style={{
+                  padding: '0.65rem 0.8rem',
+                  border: '1px solid var(--border-alt)',
+                  borderRadius: styleMode === 'neo' ? 0 : 8,
+                  background: 'rgba(255,255,255,0.03)',
+                  fontFamily: 'monospace',
+                  fontSize: '0.7rem',
+                  color: backgroundEngine.includes('Worker') ? '#4ade80' : 'var(--text2)'
+                }}>
+                  Stream engine: {backgroundEngine}
+                  {backgroundEngine === 'foreground fallback' && (
+                    <div style={{ marginTop: 4, color: '#fbbf24' }}>
+                      Background-tab smoothness is not guaranteed in fallback mode. Install/open this controller as its own app window for better stability.
+                    </div>
+                  )}
+                </div>
 
                 <div style={{ width: '100%', height: 180, background: '#000', borderRadius: styleMode === 'neo' ? 0 : 8, overflow: 'hidden', border: '1px solid var(--border-alt)' }}>
                   <canvas ref={specCanvasRef} width={520} height={180} style={{ width: '100%', height: '100%', display: 'block' }} />
@@ -997,7 +1956,7 @@ export default function App() {
           {/* Diagnostics Tab with Human-Readable Logs (Requirement #6) */}
           {activeTab === 'diagnostics' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              
+
               {/* Hardware State Inspector */}
               <article className="panel" style={{ padding: '1.25rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.75rem' }}>
@@ -1035,7 +1994,13 @@ export default function App() {
                       Human-Readable Activity Log
                     </h2>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                    <ToggleSwitch
+                      checked={debugMode}
+                      onChange={setDebugMode}
+                      label="Raw Debug"
+                      color="var(--accent2)"
+                    />
                     <button
                       className="btn btn-secondary"
                       style={{ fontSize: '0.7rem', padding: '0.35rem 0.7rem' }}
@@ -1125,7 +2090,7 @@ export default function App() {
                 letterSpacing: '0.1em', border: '1px solid rgba(236,72,153,0.3)',
                 animation: 'pulseDot 2s ease-in-out infinite'
               }}>
-                STREAMING DIRECT RGB
+                STREAMING AUDIO RGB
               </span>
             )}
           </div>
@@ -1136,11 +2101,14 @@ export default function App() {
             rgb={rgb}
             speed={speed}
             brightness={brightness}
-            colorful={colorful}
+            colorful={activeEffect.colorfulOnly ? true : (activeEffect.colorful ? colorful : false)}
             audioAnalyser={audioAnalyser}
             audioMode={audioMode}
             audioGain={audioGain}
-            audioColorful={colorful}
+            audioColorful={audioColorful}
+            perKeyEditing={activeEffect.perKey === true}
+            perKeyColors={perKeyColors}
+            onKeyPaint={handlePerKeyPaint}
           />
         </section>
 
@@ -1150,14 +2118,63 @@ export default function App() {
       <FloatingColorBubble
         rgb={rgb}
         hexColor={hexColor}
-        colorful={colorful}
+        colorful={activeEffect.colorfulOnly ? true : (activeEffect.colorful ? colorful : false)}
         onColorChange={handleGlobalColorChange}
         onToggleColorful={handleToggleColorful}
         onApplyPalette={() => writeConfig('manual', true)}
         connected={connected}
-        liveApply={liveApply}
+        liveApply={realtimeSync}
+        disabled={effectId === 0 || !activeEffect.color || activeEffect.colorfulOnly}
+        colorfulDisabled={effectId === 0 || activeEffect.perKey || !activeEffect.colorful || activeEffect.colorfulOnly}
         styleMode={styleMode}
       />
+
+      {/* 6. Floating Status Indicator (Requirement #2) */}
+      <div
+        style={{
+          position: 'fixed',
+          bottom: '2rem',
+          left: '2rem',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.6rem',
+          background: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid var(--border-alt)',
+          padding: '0.45rem 0.75rem',
+          borderRadius: styleMode === 'neo' ? 0 : 20,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+          fontFamily: 'monospace',
+          fontSize: '0.65rem',
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          pointerEvents: 'none',
+          userSelect: 'none',
+          transition: 'border-color 0.25s, background-color 0.25s',
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background:
+              (vizRunning || txStatus === 'sending') ? '#eab308' :
+              txStatus === 'success' ? '#22c55e' : '#ef4444',
+            boxShadow:
+              (vizRunning || txStatus === 'sending') ? '0 0 12px #eab308' :
+              txStatus === 'success' ? '0 0 12px #22c55e' : '0 0 12px #ef4444',
+            display: 'inline-block',
+            transition: 'background-color 0.25s, box-shadow 0.25s',
+            animation: (vizRunning || txStatus === 'sending') ? 'indicatorPulse 1.2s infinite ease-in-out' : 'none',
+          }}
+        />
+        <span style={{ color: 'var(--text2)', textTransform: 'uppercase' }}>
+          {(vizRunning || txStatus === 'sending') ? 'TX Stream' :
+           txStatus === 'success' ? 'TX Success' : 'TX Idle'}
+        </span>
+      </div>
     </div>
   );
 }

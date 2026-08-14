@@ -26,16 +26,20 @@ export const effects = [
   { id:3,  name:"Rainbow",             speed:true,  color:false, colorfulOnly:true  },
   { id:4,  name:"Flash Away",          speed:true,  color:true,  colorful:true      },
   { id:5,  name:"Raindrops",           speed:true,  color:true,  colorful:true      },
+  { id:6,  name:"Rainbow Wheel",       speed:true,  color:true,  colorful:true, experimental:true },
   { id:7,  name:"Ripples Shining",     speed:true,  color:true,  colorful:true      },
   { id:8,  name:"Stars Twinkle",       speed:true,  color:true,  colorful:true      },
+  { id:9,  name:"Shadow Disappear",    speed:true,  color:true,  colorful:true, experimental:true },
   { id:10, name:"Retro Snake",         speed:true,  color:true,  colorful:true      },
   { id:11, name:"Neon Stream",         speed:true,  color:true,  colorful:true      },
   { id:12, name:"Reaction",            speed:true,  color:true,  colorful:true      },
   { id:13, name:"Sine Wave",           speed:true,  color:true,  colorful:true      },
+  { id:14, name:"Retinue Scanning",    speed:true,  color:true,  colorful:true, experimental:true },
   { id:15, name:"Rotating Windmill",   speed:true,  color:false, colorfulOnly:true  },
   { id:16, name:"Colorful Waterfall",  speed:true,  color:false, colorfulOnly:true  },
   { id:17, name:"Blossoming",          speed:true,  color:false, colorfulOnly:true  },
-];
+  { id:18, name:"Rotating Storm",      speed:true,  color:true,  colorful:true, experimental:true },
+]
 
 /** OEM Audio Modes */
 export const audioModes = [
@@ -162,7 +166,8 @@ export const SNAKE_PATH = PHYSICAL_KEYS.map(k => k[0]);
 
 /**
  * 520-byte OEM palette report template (Feature Report 0x06 / Cmd 0x0A).
- * Custom RGB bytes are at report offsets [29, 30, 31].
+ * Custom RGB is stored per effect in 21-byte blocks.
+ * RGB offset = 29 + (effectId - 1) * 21 (e.g. Raindrops #5 => 113..115).
  * Validated to produce exactly 1040 hex characters (520 bytes).
  */
 export const PALETTE_HEX =
