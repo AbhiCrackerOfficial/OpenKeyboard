@@ -3,7 +3,7 @@ import {
   Wifi, WifiOff, Sliders, Volume2, Terminal,
   Sun, Gauge, Mic, Monitor, Square, Play,
   Trash2, RefreshCw, Activity, Layers, Info,
-  Palette, Sparkles, Cpu, Download, Paintbrush, Eraser, X
+  Palette, Sparkles, Cpu, Download, Upload, Paintbrush, Eraser, X
 } from 'lucide-react';
 import KeyboardVisualizer from './components/KeyboardVisualizer';
 import FloatingColorBubble from './components/FloatingColorBubble';
@@ -393,7 +393,14 @@ export default function App() {
           lastStateRef.current = s;
           setLastRawData(raw.slice(0, 32));
           setReadback(describeState(s));
-          applyStateToUI(s);
+          const hardwareColors = {};
+          for (let id = 1; id <= 18; id++) {
+            const offset = matchedProf.paletteColorOffset?.(id);
+            if (offset !== null && offset !== undefined && offset + 2 < raw.length) {
+              hardwareColors[id] = [raw[offset], raw[offset + 1], raw[offset + 2]];
+            }
+          }
+          applyStateToUI(s, hardwareColors);
           addLog('read', `Initial state synchronized: Effect = ${getEffectName(s.id)}, Brightness = ${s.brightness}/4, Speed = ${s.speed}/4, Mode = ${s.colorful ? 'Rainbow' : 'Single-color'}`);
         }).catch(() => { });
       }).catch(() => { });
@@ -561,12 +568,18 @@ export default function App() {
     return `${getEffectName(s.id)} · Brightness: ${s.brightness ?? '?'}/4 · Speed: ${s.speed ?? '?'}/4 · ${s.colorful ? 'Colorful' : 'Single-color'}`;
   };
 
-  const applyStateToUI = s => {
+  const applyStateToUI = (s, hardwareColors = null) => {
     const found = profile.effects.find(e => e.id === s.id);
     if (!found) return;
     suppressLiveRef.current = true;
     setEffectId(s.id);
-    const remembered = effectColors[s.id];
+    let nextEffectColors = { ...effectColors };
+    if (hardwareColors) {
+      nextEffectColors = { ...nextEffectColors, ...hardwareColors };
+      setEffectColors(nextEffectColors);
+      localStorage.setItem('openkeyboard_effect_colors', JSON.stringify(nextEffectColors));
+    }
+    const remembered = nextEffectColors[s.id];
     if (Array.isArray(remembered) && remembered.length >= 3) {
       const nextRgb = remembered.slice(0, 3);
       setRgb(nextRgb);
@@ -610,7 +623,14 @@ export default function App() {
       lastStateRef.current = s;
       setLastRawData(raw.slice(0, 32));
       setReadback(describeState(s));
-      applyStateToUI(s);
+      const hardwareColors = {};
+      for (let id = 1; id <= 18; id++) {
+        const offset = matchedProfile.paletteColorOffset?.(id);
+        if (offset !== null && offset !== undefined && offset + 2 < raw.length) {
+          hardwareColors[id] = [raw[offset], raw[offset + 1], raw[offset + 2]];
+        }
+      }
+      applyStateToUI(s, hardwareColors);
       addLog('sync', `Loaded hardware config: ${describeState(s)}`);
     } catch (err) {
       console.error(err);
@@ -648,7 +668,14 @@ export default function App() {
       setReadback(desc);
       if (changed) {
         addLog('sync', `Detected knob/hardware changes: ${desc}`);
-        applyStateToUI(s);
+        const hardwareColors = {};
+        for (let id = 1; id <= 18; id++) {
+          const offset = profile.paletteColorOffset?.(id);
+          if (offset !== null && offset !== undefined && offset + 2 < raw.length) {
+            hardwareColors[id] = [raw[offset], raw[offset + 1], raw[offset + 2]];
+          }
+        }
+        applyStateToUI(s, hardwareColors);
       }
     } catch (err) {
       addLog('error', `Sync failed: ${err.message}`);
@@ -1347,6 +1374,61 @@ export default function App() {
     addLog('system', `Deleted template "${name}"`);
   };
 
+  const downloadPerKeyTemplate = () => {
+    try {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(perKeyColors, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      const keyboardNameSanitized = profile.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      downloadAnchor.setAttribute("download", `openkeyboard_layout_${keyboardNameSanitized}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      addLog('system', 'Downloaded current layout paint template JSON file.');
+    } catch (err) {
+      addLog('error', `Failed to download layout: ${err.message}`);
+    }
+  };
+
+  const triggerUploadPerKeyTemplate = () => {
+    document.getElementById('per-key-upload-input')?.click();
+  };
+
+  const uploadPerKeyTemplate = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (typeof parsed !== 'object' || parsed === null) {
+          throw new Error('Invalid JSON format.');
+        }
+
+        const newMap = {};
+        Object.entries(parsed).forEach(([idxText, color]) => {
+          const idx = Number(idxText);
+          if (Number.isInteger(idx) && Array.isArray(color) && color.length >= 3) {
+            newMap[idx] = [color[0] & 0xff, color[1] & 0xff, color[2] & 0xff];
+          }
+        });
+
+        if (Object.keys(newMap).length === 0) {
+          throw new Error('No valid layout color coordinates found in JSON.');
+        }
+
+        setPerKeyColors(newMap);
+        addLog('system', `Restored layout template containing ${Object.keys(newMap).length} custom keys.`);
+      } catch (err) {
+        addLog('error', `Failed to restore template: ${err.message}`);
+      } finally {
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const accentCSS = { color: 'var(--accent)' };
   const accent2CSS = { color: 'var(--accent2)' };
 
@@ -1847,6 +1929,32 @@ export default function App() {
                         >
                           Save
                         </button>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.1rem' }}>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={downloadPerKeyTemplate}
+                          style={{ flex: 1, fontSize: '0.68rem', padding: '0.4rem 0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                          title="Download current layout as a JSON file"
+                        >
+                          <Download size={11} /> Download JSON
+                        </button>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={triggerUploadPerKeyTemplate}
+                          style={{ flex: 1, fontSize: '0.68rem', padding: '0.4rem 0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                          title="Upload and restore a layout JSON file"
+                        >
+                          <Upload size={11} /> Restore JSON
+                        </button>
+                        <input
+                          id="per-key-upload-input"
+                          type="file"
+                          accept=".json"
+                          onChange={uploadPerKeyTemplate}
+                          style={{ display: 'none' }}
+                        />
                       </div>
 
                       {templates.length > 0 && (
