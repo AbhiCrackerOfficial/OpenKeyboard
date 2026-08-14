@@ -1,4 +1,4 @@
-class F87AudioAnalysisProcessor extends AudioWorkletProcessor {
+class OpenKeyboardAudioAnalysisProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.ring = new Float32Array(256);
@@ -75,4 +75,4 @@ class F87AudioAnalysisProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('f87-audio-analysis', F87AudioAnalysisProcessor);
+registerProcessor('openkeyboard-audio-analysis', OpenKeyboardAudioAnalysisProcessor);

@@ -25,7 +25,7 @@ async function findDevice() {
   if (!self.navigator?.hid) throw new Error('Worker WebHID is not available in this Chromium build.');
   const devices = await self.navigator.hid.getDevices();
   const found = devices.find(d => d.vendorId === profile.vid && d.productId === profile.pid);
-  if (!found) throw new Error('No previously-authorized F87 is visible to the background HID worker.');
+  if (!found) throw new Error('No previously-authorized keyboard is visible to the background HID worker.');
   if (!found.opened) await found.open();
   return found;
 }

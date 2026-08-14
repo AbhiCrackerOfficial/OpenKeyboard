@@ -17,7 +17,20 @@ const DEBOUNCE_MS = 1000;
 const AUTO_SYNC_INTERVAL_MS = 1000;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const ls = (k, fb) => { try { return JSON.parse(localStorage.getItem(k)) ?? fb; } catch { return fb; } };
+const ls = (k, fb) => {
+  try {
+    const val = localStorage.getItem(k);
+    if (val !== null) return JSON.parse(val);
+    const oldKey = k.replace('openkeyboard_', 'f87_');
+    if (oldKey !== k) {
+      const oldVal = localStorage.getItem(oldKey);
+      if (oldVal !== null) return JSON.parse(oldVal);
+    }
+    return fb;
+  } catch {
+    return fb;
+  }
+};
 
 export default function App() {
 
@@ -25,8 +38,8 @@ export default function App() {
   const [profile, setProfile] = useState(DEFAULT_KEYBOARD_PROFILE);
 
   // ── UI Mode ─────────────────────────────────────────────────────────────
-  const [themeMode, setThemeMode] = useState(() => ls('f87_theme', 'dark'));
-  const [styleMode, setStyleMode] = useState(() => ls('f87_style', 'glass'));
+  const [themeMode, setThemeMode] = useState(() => ls('openkeyboard_theme', 'dark'));
+  const [styleMode, setStyleMode] = useState(() => ls('openkeyboard_style', 'glass'));
 
   // ── Navigation ────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('lighting');
@@ -37,14 +50,14 @@ export default function App() {
   const [supported, setSupported] = useState(true);
 
   // ── Lighting Settings (Default to Red #FF0000 as per Requirement #5) ──────
-  const [effectId, setEffectId] = useState(() => ls('f87_effectId', 1));
-  const [brightness, setBrightness] = useState(() => ls('f87_brightness', 4));
-  const [speed, setSpeed] = useState(() => ls('f87_speed', 4));
-  const [colorful, setColorful] = useState(() => ls('f87_colorful', false));
-  const [rgb, setRgb] = useState(() => ls('f87_rgb', [255, 0, 0]));
-  const [hexColor, setHexColor] = useState(() => ls('f87_hex', '#FF0000'));
-  const [effectColors, setEffectColors] = useState(() => ls('f87_effectColors', {}));
-  const [perKeyColors, setPerKeyColors] = useState(() => ls('f87_perKeyColors', {}));
+  const [effectId, setEffectId] = useState(() => ls('openkeyboard_effectId', 1));
+  const [brightness, setBrightness] = useState(() => ls('openkeyboard_brightness', 4));
+  const [speed, setSpeed] = useState(() => ls('openkeyboard_speed', 4));
+  const [colorful, setColorful] = useState(() => ls('openkeyboard_colorful', false));
+  const [rgb, setRgb] = useState(() => ls('openkeyboard_rgb', [255, 0, 0]));
+  const [hexColor, setHexColor] = useState(() => ls('openkeyboard_hex', '#FF0000'));
+  const [effectColors, setEffectColors] = useState(() => ls('openkeyboard_effectColors', {}));
+  const [perKeyColors, setPerKeyColors] = useState(() => ls('openkeyboard_perKeyColors', {}));
   const [perKeyErase, setPerKeyErase] = useState(false);
 
   // ── Audio ──────────────────────────────────────────────────────────────────
@@ -56,8 +69,8 @@ export default function App() {
   const [vizRunning, setVizRunning] = useState(false);
   // Only the two REAL transports are selectable. Automatic fallback is a
   // separate behavior toggle, not a fake third transport.
-  const [audioTransport, setAudioTransport] = useState(() => ls('f87_audioTransport', 'audio88') === 'direct520' ? 'direct520' : 'audio88');
-  const [audioFallback, setAudioFallback] = useState(() => ls('f87_audioFallback', true));
+  const [audioTransport, setAudioTransport] = useState(() => ls('openkeyboard_audioTransport', 'audio88') === 'direct520' ? 'direct520' : 'audio88');
+  const [audioFallback, setAudioFallback] = useState(() => ls('openkeyboard_audioFallback', true));
   const [audioColorful, setAudioColorful] = useState(true);
   const [backgroundEngine, setBackgroundEngine] = useState('idle');
   const [transportCaps, setTransportCaps] = useState({ audio88: null, direct520: null });
@@ -71,7 +84,7 @@ export default function App() {
   const [showInfo, setShowInfo] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [templateName, setTemplateName] = useState('');
-  const [templates, setTemplates] = useState(() => ls('f87_custom_templates', []));
+  const [templates, setTemplates] = useState(() => ls('openkeyboard_custom_templates', []));
   const [txStatus, setTxStatus] = useState('idle');
   const [installPrompt, setInstallPrompt] = useState(null);
   const [isInstalled, setIsInstalled] = useState(
@@ -146,8 +159,8 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
     document.documentElement.dataset.style = styleMode;
-    localStorage.setItem('f87_theme', JSON.stringify(themeMode));
-    localStorage.setItem('f87_style', JSON.stringify(styleMode));
+    localStorage.setItem('openkeyboard_theme', JSON.stringify(themeMode));
+    localStorage.setItem('openkeyboard_style', JSON.stringify(styleMode));
   }, [themeMode, styleMode]);
 
   useEffect(() => {
@@ -246,9 +259,9 @@ export default function App() {
 
     document.documentElement.style.setProperty('--glow', `rgba(${displayR}, ${displayG}, ${displayB}, ${effectId === 0 ? 0.14 : 0.35})`);
 
-    localStorage.setItem('f87_rgb', JSON.stringify(rgb));
+    localStorage.setItem('openkeyboard_rgb', JSON.stringify(rgb));
     const h = rgbToHex(rgb);
-    localStorage.setItem('f87_hex', JSON.stringify(h));
+    localStorage.setItem('openkeyboard_hex', JSON.stringify(h));
   }, [rgb, effectId, perKeyColors]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -298,14 +311,14 @@ export default function App() {
   // ─────────────────────────────────────────────────────────────────────────
   // Persistence
   // ─────────────────────────────────────────────────────────────────────────
-  useEffect(() => { localStorage.setItem('f87_effectId', JSON.stringify(effectId)); }, [effectId]);
-  useEffect(() => { localStorage.setItem('f87_brightness', JSON.stringify(brightness)); }, [brightness]);
-  useEffect(() => { localStorage.setItem('f87_speed', JSON.stringify(speed)); }, [speed]);
-  useEffect(() => { localStorage.setItem('f87_colorful', JSON.stringify(colorful)); }, [colorful]);
-  useEffect(() => { localStorage.setItem('f87_effectColors', JSON.stringify(effectColors)); }, [effectColors]);
-  useEffect(() => { localStorage.setItem('f87_perKeyColors', JSON.stringify(perKeyColors)); }, [perKeyColors]);
-  useEffect(() => { localStorage.setItem('f87_audioTransport', JSON.stringify(audioTransport)); }, [audioTransport]);
-  useEffect(() => { localStorage.setItem('f87_audioFallback', JSON.stringify(audioFallback)); }, [audioFallback]);
+  useEffect(() => { localStorage.setItem('openkeyboard_effectId', JSON.stringify(effectId)); }, [effectId]);
+  useEffect(() => { localStorage.setItem('openkeyboard_brightness', JSON.stringify(brightness)); }, [brightness]);
+  useEffect(() => { localStorage.setItem('openkeyboard_speed', JSON.stringify(speed)); }, [speed]);
+  useEffect(() => { localStorage.setItem('openkeyboard_colorful', JSON.stringify(colorful)); }, [colorful]);
+  useEffect(() => { localStorage.setItem('openkeyboard_effectColors', JSON.stringify(effectColors)); }, [effectColors]);
+  useEffect(() => { localStorage.setItem('openkeyboard_perKeyColors', JSON.stringify(perKeyColors)); }, [perKeyColors]);
+  useEffect(() => { localStorage.setItem('openkeyboard_audioTransport', JSON.stringify(audioTransport)); }, [audioTransport]);
+  useEffect(() => { localStorage.setItem('openkeyboard_audioFallback', JSON.stringify(audioFallback)); }, [audioFallback]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Smooth Live Apply Debounce
@@ -802,7 +815,7 @@ export default function App() {
     // tabs does not depend on requestAnimationFrame/setTimeout on this page.
     try {
       await ctx.audioWorklet.addModule('/audio-analysis-worklet.js');
-      const worklet = new AudioWorkletNode(ctx, 'f87-audio-analysis', {
+      const worklet = new AudioWorkletNode(ctx, 'openkeyboard-audio-analysis', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
@@ -1292,7 +1305,7 @@ export default function App() {
     const name = templateName.trim();
     const next = [...templates.filter(t => t.name !== name), { name, colors: { ...perKeyColors } }];
     setTemplates(next);
-    localStorage.setItem('f87_custom_templates', JSON.stringify(next));
+    localStorage.setItem('openkeyboard_custom_templates', JSON.stringify(next));
     setTemplateName('');
     addLog('system', `Saved custom layout template "${name}"`);
   };
@@ -1305,7 +1318,7 @@ export default function App() {
   const deleteTemplate = (name) => {
     const next = templates.filter(t => t.name !== name);
     setTemplates(next);
-    localStorage.setItem('f87_custom_templates', JSON.stringify(next));
+    localStorage.setItem('openkeyboard_custom_templates', JSON.stringify(next));
     addLog('system', `Deleted template "${name}"`);
   };
 

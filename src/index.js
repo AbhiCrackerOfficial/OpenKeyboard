@@ -14,7 +14,7 @@ export default {
 		if (url.pathname === '/api/status') {
 			return new Response(JSON.stringify({
 				status: 'online',
-				device: 'AULA F87 / F87 Pro Web Controller',
+				device: 'OpenKeyboard Universal WebHID Controller',
 				timestamp: new Date().toISOString()
 			}), {
 				headers: {
