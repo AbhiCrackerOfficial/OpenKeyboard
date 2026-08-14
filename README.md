@@ -2,7 +2,7 @@
 
 **OpenKeyboard** is a universal, open-source, web-based mechanical keyboard controller. It enables real-time lighting customizations, custom per-key canvas painting, and dynamic audio visualization directly from your web browser using the **WebHID API**—no native software, installers, or drivers required.
 
-🔗 **Live Application:** [openkeyboard.app](https://f87pro-controller.abhishekkumar-ac001-cf.workers.dev)
+🔗 **Live Application:** [openkeyboard.abhicracker.com](https://openkeyboard.abhicracker.com)
 
 ---
 

@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "f87pro-controller",
+	"name": "openkeyboard",
 	"main": "src/index.js",
 	"compatibility_date": "2026-08-13",
 	"compatibility_flags": [
@@ -15,6 +15,9 @@
 		// The path to the directory containing the `index.html` file to be served at `/`
 		"directory": "./public"
 	},
+	"routes": [
+		{ "pattern": "openkeyboard.abhicracker.com", "custom_domain": true }
+	],
 	"observability": {
 		"enabled": true
 	},
