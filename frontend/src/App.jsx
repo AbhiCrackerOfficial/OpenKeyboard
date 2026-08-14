@@ -11,7 +11,7 @@ import ToggleSwitch from './components/ToggleSwitch';
 import { KEYBOARD_PROFILES, DEFAULT_KEYBOARD_PROFILE, findKeyboardProfile } from './config/keyboards';
 import { hexFmt, rgbToHex } from './utils/colorUtils';
 import { renderAudioFrame, smoothingFromUi } from './utils/renderEngine';
-import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport } from './utils/streamProtocol';
+import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport, findOptimalHIDDevice } from './utils/streamProtocol';
 
 const DEBOUNCE_MS = 1000;
 const AUTO_SYNC_INTERVAL_MS = 1000;
@@ -517,7 +517,13 @@ export default function App() {
     if (debugModeRef.current) {
       addLog('debug', `HID OUT [${full[0].toString(16).padStart(2, '0')}] ${bytesToHex(full.slice(1, 32))}...`);
     }
-    await hidRef.current.sendFeatureReport(full[0], full.slice(1));
+    try {
+      await hidRef.current.sendFeatureReport(full[0], full.slice(1));
+    } catch (err) {
+      const colStr = hidRef.current.collections ? JSON.stringify(hidRef.current.collections.map(c => ({up: c.usagePage, u: c.usage}))) : 'Unknown';
+      addLog('error', `Feature Write failed: [${err.name}] ${err.message} (Device Collections: ${colStr})`);
+      throw err;
+    }
   };
 
   const normaliseBody = (view) => {
@@ -583,9 +589,10 @@ export default function App() {
         filters: KEYBOARD_PROFILES.map(p => ({ vendorId: p.vid, productId: p.pid }))
       });
       if (!list.length) { addLog('system', 'No keyboard selected in browser dialog.'); return; }
-      const d = list[0];
-      const matchedProfile = findKeyboardProfile(d.vendorId, d.productId);
+      const firstDev = list[0];
+      const matchedProfile = findKeyboardProfile(firstDev.vendorId, firstDev.productId);
       setProfile(matchedProfile);
+      const d = findOptimalHIDDevice(list, matchedProfile);
 
       if (!d.opened) await d.open();
       hidRef.current = d;
@@ -606,7 +613,12 @@ export default function App() {
       applyStateToUI(s);
       addLog('sync', `Loaded hardware config: ${describeState(s)}`);
     } catch (err) {
-      addLog('error', `Connection error: ${err.message}`);
+      console.error(err);
+      let errorMsg = `Connection error: [${err.name}] ${err.message}`;
+      if (err.name === 'SecurityError' || err.message.toLowerCase().includes('access denied')) {
+        errorMsg += ' (macOS blocks standard keyboard collections. Ensure the browser matches and opens the vendor-defined collection.)';
+      }
+      addLog('error', errorMsg);
     } finally { ioBusyRef.current = false; }
   };
 
@@ -896,7 +908,13 @@ export default function App() {
   const sendSmallFeatureReport = async (reportId, data) => {
     const body = new Uint8Array(profile.reportSize - 1);
     body.set(data.slice(0, body.length));
-    await hidRef.current.sendFeatureReport(reportId, body);
+    try {
+      await hidRef.current.sendFeatureReport(reportId, body);
+    } catch (err) {
+      const colStr = hidRef.current.collections ? JSON.stringify(hidRef.current.collections.map(c => ({up: c.usagePage, u: c.usage}))) : 'Unknown';
+      addLog('error', `Small Feature Write failed (Report ${reportId}): [${err.name}] ${err.message} (Device Collections: ${colStr})`);
+      throw err;
+    }
   };
 
   const enableDirectMode = async () => {
@@ -921,7 +939,13 @@ export default function App() {
 
   const send20ByteOutput = async (frame) => {
     // WebHID strips the report ID from the body.
-    await hidRef.current.sendReport(frame[0], frame.slice(1));
+    try {
+      await hidRef.current.sendReport(frame[0], frame.slice(1));
+    } catch (err) {
+      const colStr = hidRef.current.collections ? JSON.stringify(hidRef.current.collections.map(c => ({up: c.usagePage, u: c.usage}))) : 'Unknown';
+      addLog('error', `20-byte Output Write failed: [${err.name}] ${err.message} (Device Collections: ${colStr})`);
+      throw err;
+    }
   };
 
   const chooseStreamTransport = () => {

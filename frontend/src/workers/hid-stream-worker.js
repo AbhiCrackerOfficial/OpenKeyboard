@@ -1,6 +1,6 @@
 import { getProfileDriver } from '../config/keyboards';
 import { renderAudioFrame } from '../utils/renderEngine';
-import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport } from '../utils/streamProtocol';
+import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport, findOptimalHIDDevice } from '../utils/streamProtocol';
 
 let profile = null;
 
@@ -26,8 +26,9 @@ const postStatus = (type, message, extra = {}) => self.postMessage({ type, messa
 async function findDevice() {
   if (!self.navigator?.hid) throw new Error('Worker WebHID is not available in this Chromium build.');
   const devices = await self.navigator.hid.getDevices();
-  const found = devices.find(d => d.vendorId === profile.vid && d.productId === profile.pid);
-  if (!found) throw new Error('No previously-authorized keyboard is visible to the background HID worker.');
+  const matched = devices.filter(d => d.vendorId === profile.vid && d.productId === profile.pid);
+  if (!matched.length) throw new Error('No previously-authorized keyboard is visible to the background HID worker.');
+  const found = findOptimalHIDDevice(matched, profile);
   if (!found.opened) await found.open();
   return found;
 }

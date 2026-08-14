@@ -93,3 +93,24 @@ export function hasFeatureReport(device, reportId) {
 export function hasOutputReport(device, reportId) {
   return walkCollections(device?.collections, c => (c.outputReports || []).some(r => r.reportId === reportId));
 }
+
+export function findOptimalHIDDevice(devices, profile) {
+  if (!devices || devices.length === 0) return null;
+  if (devices.length === 1) return devices[0];
+
+  // 1. Try to find the interface that supports the custom feature report
+  const withFeature = devices.find(d => hasFeatureReport(d, profile.reportId));
+  if (withFeature) return withFeature;
+
+  // 2. Try to find the interface that supports the custom output report (0x13)
+  const withOutput = devices.find(d => hasOutputReport(d, 0x13));
+  if (withOutput) return withOutput;
+
+  // 3. Fallback to vendor-defined collections (ignoring keyboard 0x01/0x06 and mouse 0x01/0x02)
+  const nonStandard = devices.find(d => {
+    return d.collections && !d.collections.some(c => c.usagePage === 0x01 && (c.usage === 0x06 || c.usage === 0x02));
+  });
+  if (nonStandard) return nonStandard;
+
+  return devices[0];
+}
