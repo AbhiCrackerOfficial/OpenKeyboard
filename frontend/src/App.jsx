@@ -996,6 +996,7 @@ export default function App() {
       };
       worker.postMessage({
         type: 'start',
+        profileId: profile.id,
         preference: audioTransport === 'direct520' ? 'direct520' : 'audio88',
         fallback: audioFallback,
       });
@@ -1580,7 +1581,7 @@ export default function App() {
                     </h2>
                   </div>
                   <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text3)' }}>
-                    {profile.effects.length} Effects Available
+                    {profile.effects.length} Presets
                   </span>
                 </div>
 

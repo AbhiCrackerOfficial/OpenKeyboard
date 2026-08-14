@@ -1,6 +1,8 @@
-import { AULA_F87_PROFILE as profile } from '../config/keyboards/aula/f87';
+import { getProfileDriver } from '../config/keyboards';
 import { renderAudioFrame } from '../utils/renderEngine';
 import { buildAudioStreamFrames, hasFeatureReport, hasOutputReport } from '../utils/streamProtocol';
+
+let profile = null;
 
 let device = null;
 let audioPort = null;
@@ -72,7 +74,8 @@ async function selectTransport() {
   throw new Error(`Selected transport ${preference} is not exposed by this HID collection${fallback ? ' and fallback is unavailable' : ''}.`);
 }
 
-async function start() {
+async function start(profileId) {
+  profile = await getProfileDriver(profileId);
   device = await findDevice();
   transport = await selectTransport();
   if (transport === 'direct520') {
@@ -154,7 +157,7 @@ self.onmessage = async event => {
     if (msg.type === 'start') {
       preference = msg.preference === 'direct520' ? 'direct520' : 'audio88';
       fallback = msg.fallback !== false;
-      await start();
+      await start(msg.profileId);
       return;
     }
     if (msg.type === 'stop') {
