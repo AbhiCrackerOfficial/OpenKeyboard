@@ -12,14 +12,16 @@
 		"global_fetch_strictly_public"
 	],
 	"assets": {
-		// The path to the directory containing the `index.html` file to be served at `/`
 		"directory": "./public"
 	},
 	"routes": [
-		{ "pattern": "openkeyboard.abhicracker.com", "custom_domain": true }
+		{
+			"pattern": "openkeyboard.abhicracker.com",
+			"custom_domain": true
+		}
 	],
 	"observability": {
-		"enabled": true
+		"enabled": false
 	},
 	"upload_source_maps": true
 	/**
