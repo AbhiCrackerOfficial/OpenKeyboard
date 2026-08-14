@@ -252,7 +252,7 @@ export default function KeyboardVisualizer({
           }}
         >
           {/* AULA Logo & RGB Light Bar (Right Plate above Arrow keys) */}
-          {profile.brand === 'AULA' && (
+          {profile.brand && (
             <div
               style={{
                 ...getKeyStyle(15.55, 3.55, 3.15, 0.55),
@@ -275,7 +275,7 @@ export default function KeyboardVisualizer({
                   textShadow: '0 1px 2px rgba(0,0,0,0.9), 0 0 4px rgba(255,255,255,0.6)',
                 }}
               >
-                AULA
+                {profile.brand.toUpperCase()}
               </span>
               <div
                 ref={lightBarRef}

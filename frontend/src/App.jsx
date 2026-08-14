@@ -2231,6 +2231,7 @@ export default function App() {
         disabled={effectId === 0 || !activeEffect.color || activeEffect.colorfulOnly}
         colorfulDisabled={effectId === 0 || activeEffect.perKey || !activeEffect.colorful || activeEffect.colorfulOnly}
         styleMode={styleMode}
+        profile={profile}
       />
 
       {/* 6. Floating Status Indicator (Requirement #2) */}

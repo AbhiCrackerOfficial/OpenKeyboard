@@ -26,7 +26,8 @@ export default function FloatingColorBubble({
   liveApply = true,
   disabled = false,
   colorfulDisabled = false,
-  styleMode = 'glass'
+  styleMode = 'glass',
+  profile
 }) {
   const [isOpen, setIsOpen] = useState(true);
   const [hexDraft, setHexDraft] = useState(hexColor || rgbToHex(rgb));
@@ -214,7 +215,11 @@ export default function FloatingColorBubble({
             lineHeight: 1.4,
           }}>
             RGB hex: <strong style={{ color: 'var(--text2)' }}>{currentHex}</strong>
-            {' · '}AULA OEM display: <strong style={{ color: 'var(--text2)' }}>{aulaDisplayHex}</strong>
+            {profile?.brand === 'AULA' && (
+              <>
+                {' · '}AULA OEM display: <strong style={{ color: 'var(--text2)' }}>{aulaDisplayHex}</strong>
+              </>
+            )}
           </div>
 
           {/* RGB Sliders */}

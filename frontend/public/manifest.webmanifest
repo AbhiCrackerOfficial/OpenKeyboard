@@ -1,7 +1,7 @@
 {
-  "name": "AULA F87 Pro Web Controller",
-  "short_name": "F87 Controller",
-  "description": "Cross-platform WebHID controller for AULA F87 / F87 Pro lighting, per-key RGB and audio visualization.",
+  "name": "OpenKeyboard · Universal Controller",
+  "short_name": "OpenKeyboard",
+  "description": "A universal, open-source web controller for mechanical keyboards. Customize lighting presets, paint per-key maps, and stream real-time audio visuals using WebHID in your browser.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
